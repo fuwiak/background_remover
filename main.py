@@ -142,14 +142,14 @@ async def process_fal(image_bytes: bytes, api_key: str, prompt: Optional[str] = 
         os.environ["FAL_KEY"] = api_key
     
     try:
-        # Конвертируем изображение в base64 data URL
-        image_base64 = base64.b64encode(image_bytes).decode('utf-8')
-        image_data_url = f"data:image/jpeg;base64,{image_base64}"
+        # FAL требует upload файла в их storage и получения URL
+        # Используем fal_client.upload() для upload bytes
+        # Upload файла в FAL storage и получаем URL
+        image_url = await fal_client.upload(image_bytes, content_type="image/jpeg")
         
         # Подготавливаем аргументы для fal-ai/imageutils/rembg
-        # Этот модель не требует prompt, только image_url
         arguments = {
-            "image_url": image_data_url
+            "image_url": image_url
         }
         
         # Используем fal-client для асинхронной обработки
@@ -166,6 +166,9 @@ async def process_fal(image_bytes: bytes, api_key: str, prompt: Optional[str] = 
                 logging.info(f"FAL event: {event.type}")
         
         result = await handler.get()
+        
+        # Логируем результат для отладки
+        logging.info(f"FAL result type: {type(result)}, content: {str(result)[:200] if result else 'None'}")
         
         # Получаем URL результата
         # FAL возвращает {"image": {"url": "...", ...}} или {"image": "url_string"}
@@ -196,7 +199,7 @@ async def process_fal(image_bytes: bytes, api_key: str, prompt: Optional[str] = 
         
         if not result_url:
             logging.error(f"FAL result structure: {result}")
-            raise HTTPException(status_code=500, detail="FAL: No image URL in result")
+            raise HTTPException(status_code=500, detail=f"FAL: No image URL in result. Result: {str(result)[:500]}")
         
         # Скачиваем результат
         async with httpx.AsyncClient() as client:

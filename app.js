@@ -652,7 +652,7 @@ class App {
             reader.onload = (e) => {
                 // Обновляем превью с изображением
                 uploadPreview.innerHTML = `
-                    <img id="uploadImage" class="preview-image" src="${e.target.result}" alt="Загруженное фото">
+                    <img id="uploadImage" class="preview-image" src="${e.target.result}" alt="Загруженное фото" onerror="this.style.display='none'; this.parentElement.innerHTML='<div style=\\'color: var(--error-color); padding: 20px;\\'>Ошибка загрузки изображения</div>'">
                     <button id="removeImageBtn" class="btn btn-small">Удалить</button>
                 `;
                 
@@ -668,6 +668,35 @@ class App {
                 if (processBtn) {
                     processBtn.style.display = 'block';
                 }
+                
+                // Проверяем, загрузилось ли изображение
+                const img = document.getElementById('uploadImage');
+                if (img) {
+                    img.onload = () => {
+                        console.log('Изображение успешно загружено');
+                    };
+                    img.onerror = () => {
+                        console.error('Ошибка загрузки изображения');
+                        uploadPreview.innerHTML = `
+                            <div style="color: var(--error-color); padding: 20px; text-align: center;">
+                                Ошибка загрузки изображения<br>
+                                <button id="removeImageBtn" class="btn btn-small" style="margin-top: 10px;">Закрыть</button>
+                            </div>
+                        `;
+                        const closeBtn = document.getElementById('removeImageBtn');
+                        if (closeBtn) {
+                            closeBtn.addEventListener('click', () => {
+                                this.clearUpload();
+                            });
+                        }
+                    };
+                }
+            };
+            reader.onerror = (error) => {
+                console.error('FileReader error:', error);
+                this.showError('Ошибка чтения файла');
+                document.getElementById('uploadArea').style.display = 'flex';
+                document.getElementById('uploadPreview').style.display = 'none';
             };
             reader.readAsDataURL(fileObj);
             
