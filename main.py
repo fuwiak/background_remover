@@ -168,19 +168,35 @@ async def process_fal(image_bytes: bytes, api_key: str, prompt: Optional[str] = 
         result = await handler.get()
         
         # Получаем URL результата
+        # FAL возвращает {"image": {"url": "...", ...}} или {"image": "url_string"}
         result_url = None
         if isinstance(result, dict):
             if "image" in result:
-                result_url = result["image"]
+                image_data = result["image"]
+                # Если image это объект с url
+                if isinstance(image_data, dict) and "url" in image_data:
+                    result_url = image_data["url"]
+                # Если image это строка (URL)
+                elif isinstance(image_data, str):
+                    result_url = image_data
             elif "output" in result:
-                result_url = result["output"]
+                output_data = result["output"]
+                if isinstance(output_data, dict) and "url" in output_data:
+                    result_url = output_data["url"]
+                elif isinstance(output_data, str):
+                    result_url = output_data
             elif "images" in result and len(result["images"]) > 0:
-                result_url = result["images"][0]
+                first_image = result["images"][0]
+                if isinstance(first_image, dict) and "url" in first_image:
+                    result_url = first_image["url"]
+                elif isinstance(first_image, str):
+                    result_url = first_image
         elif isinstance(result, str):
             result_url = result
         
         if not result_url:
-            raise HTTPException(status_code=500, detail="FAL: No image in result")
+            logging.error(f"FAL result structure: {result}")
+            raise HTTPException(status_code=500, detail="FAL: No image URL in result")
         
         # Скачиваем результат
         async with httpx.AsyncClient() as client:
