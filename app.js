@@ -321,11 +321,12 @@ class ImageProcessor {
         }
     }
 
-    async placeOnTemplate(imageBlob, templatePath, format = '1:1') {
+    async placeOnTemplate(imageBlob, templatePath, width = 1200, height = 1200) {
         const formData = new FormData();
         formData.append('image', imageBlob);
         formData.append('template', templatePath);
-        formData.append('format', format);
+        formData.append('width', width.toString());
+        formData.append('height', height.toString());
 
         try {
             const response = await fetch('/api/place-template', {
@@ -362,11 +363,31 @@ class App {
         // Устанавливаем FAL как модель по умолчанию
         this.modelManager.setCurrentModel('fal');
         this.setupEventListeners();
+        this.setupSliders();
         // Инициализируем панель API ключей после загрузки DOM
         setTimeout(() => {
             this.setupApiKeysPanel();
             this.loadApiKeysFromStorage();
         }, 100);
+    }
+    
+    setupSliders() {
+        const widthSlider = document.getElementById('widthSlider');
+        const heightSlider = document.getElementById('heightSlider');
+        const widthValue = document.getElementById('widthValue');
+        const heightValue = document.getElementById('heightValue');
+        
+        if (widthSlider && widthValue) {
+            widthSlider.addEventListener('input', (e) => {
+                widthValue.textContent = e.target.value;
+            });
+        }
+        
+        if (heightSlider && heightValue) {
+            heightSlider.addEventListener('input', (e) => {
+                heightValue.textContent = e.target.value;
+            });
+        }
     }
 
     setupEventListeners() {
@@ -975,15 +996,18 @@ class App {
                 prompt
             );
 
-            // Получаем выбранный формат
-            const formatSelect = document.getElementById('formatSelect');
-            const selectedFormat = formatSelect ? formatSelect.value : '1:1';
+            // Получаем размеры из слайдеров
+            const widthSlider = document.getElementById('widthSlider');
+            const heightSlider = document.getElementById('heightSlider');
+            const width = widthSlider ? parseInt(widthSlider.value) : 1200;
+            const height = heightSlider ? parseInt(heightSlider.value) : 1200;
             
             // Размещение на шаблон
             const templateBlob = await this.imageProcessor.placeOnTemplate(
                 processedBlob,
                 'default',
-                selectedFormat
+                width,
+                height
             );
 
             // Отображение результата

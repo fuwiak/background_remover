@@ -379,26 +379,18 @@ async def process_image(
 async def place_template(
     image: UploadFile = File(...),
     template: str = Form("default"),
-    format: str = Form("1:1")
+    width: int = Form(1200),
+    height: int = Form(1200)
 ):
-    """Размещение обработанного изображения на шаблон с выбором формата"""
+    """Размещение обработанного изображения на шаблон с настраиваемым размером"""
     try:
         # Загружаем изображение
         image_bytes = await image.read()
         processed_img = Image.open(io.BytesIO(image_bytes))
         
-        # Определяем размеры шаблона на основе формата
-        base_size = 1200  # Базовый размер
-        if format == "1:1":
-            template_width = base_size
-            template_height = base_size
-        elif format == "3:4":
-            template_width = base_size
-            template_height = int(base_size * 4 / 3)
-        else:
-            # По умолчанию 1:1
-            template_width = base_size
-            template_height = base_size
+        # Получаем размеры шаблона из параметров
+        template_width = max(100, min(5000, width))  # Ограничиваем от 100 до 5000
+        template_height = max(100, min(5000, height))  # Ограничиваем от 100 до 5000
         
         # Создаем белый шаблон нужного размера
         template_img = Image.new("RGB", (template_width, template_height), "white")
