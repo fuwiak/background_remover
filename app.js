@@ -150,7 +150,18 @@ class YandexDiskManager {
         try {
             const tokenParam = this.accessToken ? `&token=${this.accessToken}` : '';
             const response = await fetch(`/api/yandex/download?path=${encodeURIComponent(filePath)}${tokenParam}`);
+            
+            if (!response.ok) {
+                throw new Error(`Failed to download file: ${response.status} ${response.statusText}`);
+            }
+            
             const blob = await response.blob();
+            
+            // Проверяем, что blob не пустой
+            if (blob.size === 0) {
+                throw new Error('Downloaded file is empty');
+            }
+            
             return blob;
         } catch (error) {
             console.error('Error downloading file:', error);
@@ -664,10 +675,44 @@ class App {
             
             // Загружаем изображение в превью
             const reader = new FileReader();
+            reader.onerror = (error) => {
+                console.error('FileReader error:', error);
+                uploadPreview.innerHTML = `
+                    <div style="color: var(--error-color); padding: 20px; text-align: center;">
+                        Ошибка чтения файла<br>
+                        <button id="removeImageBtn" class="btn btn-small" style="margin-top: 10px;">Закрыть</button>
+                    </div>
+                `;
+                const closeBtn = document.getElementById('removeImageBtn');
+                if (closeBtn) {
+                    closeBtn.addEventListener('click', () => {
+                        this.clearUpload();
+                    });
+                }
+            };
             reader.onload = (e) => {
+                // Проверяем, что data URL не пустой
+                if (!e.target.result || e.target.result.length < 100) {
+                    console.error('Invalid image data, length:', e.target.result ? e.target.result.length : 0);
+                    uploadPreview.innerHTML = `
+                        <div style="color: var(--error-color); padding: 20px; text-align: center;">
+                            Неверный формат изображения<br>
+                            <small>Размер файла: ${(fileObj.size / 1024).toFixed(2)} KB</small><br>
+                            <button id="removeImageBtn" class="btn btn-small" style="margin-top: 10px;">Закрыть</button>
+                        </div>
+                    `;
+                    const closeBtn = document.getElementById('removeImageBtn');
+                    if (closeBtn) {
+                        closeBtn.addEventListener('click', () => {
+                            this.clearUpload();
+                        });
+                    }
+                    return;
+                }
+                
                 // Обновляем превью с изображением
                 uploadPreview.innerHTML = `
-                    <img id="uploadImage" class="preview-image" src="${e.target.result}" alt="Загруженное фото" onerror="this.style.display='none'; this.parentElement.innerHTML='<div style=\\'color: var(--error-color); padding: 20px;\\'>Ошибка загрузки изображения</div>'">
+                    <img id="uploadImage" class="preview-image" src="${e.target.result}" alt="Загруженное фото">
                     <button id="removeImageBtn" class="btn btn-small">Удалить</button>
                 `;
                 
@@ -688,13 +733,18 @@ class App {
                 const img = document.getElementById('uploadImage');
                 if (img) {
                     img.onload = () => {
-                        console.log('Изображение успешно загружено');
+                        console.log('Изображение успешно загружено, размер:', img.naturalWidth, 'x', img.naturalHeight);
                     };
-                    img.onerror = () => {
-                        console.error('Ошибка загрузки изображения');
+                    img.onerror = (error) => {
+                        console.error('Ошибка загрузки изображения:', error);
+                        console.error('Data URL length:', e.target.result ? e.target.result.length : 0);
+                        console.error('File size:', fileObj.size, 'bytes');
+                        console.error('File type:', fileObj.type);
                         uploadPreview.innerHTML = `
                             <div style="color: var(--error-color); padding: 20px; text-align: center;">
-                                Ошибка загрузки изображения<br>
+                                Ошибка отображения изображения<br>
+                                <small>Размер файла: ${(fileObj.size / 1024).toFixed(2)} KB</small><br>
+                                <small>Тип: ${fileObj.type || 'неизвестно'}</small><br>
                                 <button id="removeImageBtn" class="btn btn-small" style="margin-top: 10px;">Закрыть</button>
                             </div>
                         `;
@@ -706,12 +756,6 @@ class App {
                         }
                     };
                 }
-            };
-            reader.onerror = (error) => {
-                console.error('FileReader error:', error);
-                this.showError('Ошибка чтения файла');
-                document.getElementById('uploadArea').style.display = 'flex';
-                document.getElementById('uploadPreview').style.display = 'none';
             };
             reader.readAsDataURL(fileObj);
             

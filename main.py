@@ -960,12 +960,29 @@ async def download_yandex_file(path: str, token: Optional[str] = None):
         
         download_url = link_response.json()["href"]
         
-        # Скачиваем файл
-        file_response = await client.get(download_url, timeout=60.0)
+        # Скачиваем файл (Yandex Disk возвращает 302 redirect, нужно следовать за ним)
+        file_response = await client.get(download_url, timeout=60.0, follow_redirects=True)
+        
+        if file_response.status_code != 200:
+            raise HTTPException(status_code=file_response.status_code, detail=f"Failed to download file: {file_response.status_code}")
+        
+        # Определяем content-type из заголовков или по расширению файла
+        content_type = file_response.headers.get("content-type", "application/octet-stream")
+        if content_type == "application/octet-stream":
+            # Пытаемся определить тип по расширению из пути
+            path_lower = path.lower()
+            if path_lower.endswith(('.jpg', '.jpeg')):
+                content_type = "image/jpeg"
+            elif path_lower.endswith('.png'):
+                content_type = "image/png"
+            elif path_lower.endswith('.gif'):
+                content_type = "image/gif"
+            elif path_lower.endswith('.webp'):
+                content_type = "image/webp"
         
         return Response(
             content=file_response.content,
-            media_type=file_response.headers.get("content-type", "application/octet-stream")
+            media_type=content_type
         )
 
 @app.post("/api/yandex/upload")
