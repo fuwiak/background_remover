@@ -143,13 +143,9 @@ async def process_fal(image_bytes: bytes, api_key: str, prompt: Optional[str] = 
     
     try:
         # FAL требует upload файла в их storage и получения URL
-        # Используем fal_client.upload() для upload bytes
-        # Создаем BytesIO объект для upload
-        import io
-        image_file = io.BytesIO(image_bytes)
-        
-        # Upload файла в FAL storage и получаем URL
-        image_url = await fal_client.upload(image_file, content_type="image/jpeg")
+        # fal_client.upload() принимает bytes напрямую, не BytesIO
+        # Upload файла в FAL storage и получаем URL (synchronous, не async)
+        image_url = fal_client.upload(image_bytes, content_type="image/jpeg")
         
         # Проверяем, что URL получен
         if not image_url:
