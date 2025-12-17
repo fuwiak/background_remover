@@ -635,9 +635,24 @@ class App {
             // Скачиваем файл через OAuth API
             const blob = await this.yandexDisk.downloadFile(file.path);
             
-            // Создаем File объект из blob
+            // Определяем тип файла на основе расширения
             const fileName = file.name || 'image.jpg';
-            const fileObj = new File([blob], fileName, { type: blob.type || 'image/jpeg' });
+            let mimeType = blob.type;
+            if (!mimeType || mimeType === 'application/octet-stream') {
+                // Определяем MIME тип по расширению
+                const ext = fileName.toLowerCase().split('.').pop();
+                const mimeTypes = {
+                    'jpg': 'image/jpeg',
+                    'jpeg': 'image/jpeg',
+                    'png': 'image/png',
+                    'gif': 'image/gif',
+                    'webp': 'image/webp'
+                };
+                mimeType = mimeTypes[ext] || 'image/jpeg';
+            }
+            
+            // Создаем File объект из blob с правильным типом
+            const fileObj = new File([blob], fileName, { type: mimeType });
             
             // Сохраняем информацию об источнике
             this.currentFileSource = {

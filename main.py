@@ -144,8 +144,18 @@ async def process_fal(image_bytes: bytes, api_key: str, prompt: Optional[str] = 
     try:
         # FAL требует upload файла в их storage и получения URL
         # Используем fal_client.upload() для upload bytes
+        # Создаем BytesIO объект для upload
+        import io
+        image_file = io.BytesIO(image_bytes)
+        
         # Upload файла в FAL storage и получаем URL
-        image_url = await fal_client.upload(image_bytes, content_type="image/jpeg")
+        image_url = await fal_client.upload(image_file, content_type="image/jpeg")
+        
+        # Проверяем, что URL получен
+        if not image_url:
+            raise HTTPException(status_code=500, detail="FAL: Failed to upload image, no URL returned")
+        
+        logging.info(f"FAL image uploaded, URL: {image_url[:100]}...")
         
         # Подготавливаем аргументы для fal-ai/imageutils/rembg
         arguments = {
@@ -211,6 +221,7 @@ async def process_fal(image_bytes: bytes, api_key: str, prompt: Optional[str] = 
     except HTTPException:
         raise
     except Exception as e:
+        logging.error(f"FAL processing error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"FAL processing error: {str(e)}")
 
 # Модели
