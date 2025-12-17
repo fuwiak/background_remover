@@ -398,19 +398,24 @@ async def place_template(
         # Получаем размеры изображения
         img_width, img_height = processed_img.size
         
-        # Размещаем изображение по центру БЕЗ уменьшения
-        # Если изображение больше шаблона, уменьшаем только если не помещается
-        if img_width > template_width or img_height > template_height:
-            # Уменьшаем только если не помещается, сохраняя пропорции
-            scale = min(template_width / img_width, template_height / img_height)
-            new_width = int(img_width * scale)
-            new_height = int(img_height * scale)
-            processed_img = processed_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            img_width, img_height = new_width, new_height
+        # Масштабируем изображение так, чтобы оно заполнило шаблон
+        # Используем больший масштаб, чтобы изображение покрывало большую часть/всё белое поле
+        # Вычисляем масштаб для заполнения по ширине и высоте, выбираем больший
+        scale_width = template_width / img_width
+        scale_height = template_height / img_height
         
-        # Центрируем
-        x = (template_width - img_width) // 2
-        y = (template_height - img_height) // 2
+        # Используем больший масштаб, чтобы изображение заполнило шаблон
+        # Это гарантирует, что изображение покроет всё белое поле
+        scale = max(scale_width, scale_height)
+        
+        # Масштабируем изображение
+        new_width = int(img_width * scale)
+        new_height = int(img_height * scale)
+        processed_img = processed_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        
+        # Центрируем (если изображение больше шаблона, оно будет обрезано по краям)
+        x = (template_width - new_width) // 2
+        y = (template_height - new_height) // 2
         
         # Создаем результат
         result = template_img.copy()
