@@ -1,7 +1,12 @@
 // Model Manager - система управления моделями API
 class ModelManager {
     constructor() {
-        this.models = {};
+        this.models = {
+            'removebg': { name: 'removebg' },
+            'clipdrop': { name: 'clipdrop' },
+            'replicate': { name: 'replicate' },
+            'fal': { name: 'fal' }
+        };
         this.currentModel = null;
         this.apiKeys = {};
     }
@@ -16,14 +21,23 @@ class ModelManager {
     }
 
     setCurrentModel(name) {
+        // Всегда устанавливаем модель, даже если она не зарегистрирована
+        this.currentModel = name;
         if (this.models[name]) {
-            this.currentModel = name;
             this.loadApiKey();
         }
     }
 
     getCurrentModel() {
-        return this.models[this.currentModel];
+        if (!this.currentModel) {
+            return null;
+        }
+        // Возвращаем объект модели или создаем его если не существует
+        if (this.models[this.currentModel]) {
+            return this.models[this.currentModel];
+        }
+        // Если модель не зарегистрирована, создаем простой объект
+        return { name: this.currentModel };
     }
 
     getApiKey(modelName = null) {
@@ -343,6 +357,11 @@ class App {
     init() {
         // Устанавливаем FAL как модель по умолчанию
         this.modelManager.setCurrentModel('fal');
+        // Синхронизируем select с выбранной моделью
+        const modelSelect = document.getElementById('modelSelect');
+        if (modelSelect) {
+            modelSelect.value = 'fal';
+        }
         this.setupEventListeners();
         // Инициализируем панель API ключей после загрузки DOM
         setTimeout(() => {
