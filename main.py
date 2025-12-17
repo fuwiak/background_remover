@@ -220,12 +220,101 @@ async def process_fal(image_bytes: bytes, api_key: str, prompt: Optional[str] = 
         logging.error(f"FAL processing error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"FAL processing error: {str(e)}")
 
+async def process_fal_object_removal(image_bytes: bytes, api_key: str, prompt: Optional[str] = None) -> bytes:
+    """FAL через fal-client используя fal-ai/image-editing/object-removal"""
+    
+    # Используем FAL_KEY из .env если не передан ключ, иначе устанавливаем переданный
+    # FAL_KEY скрыт в переменных окружения (Railway variables или .env)
+    if not api_key:
+        api_key = os.getenv("FAL_KEY", "")
+    if api_key:
+        os.environ["FAL_KEY"] = api_key
+    
+    try:
+        # FAL требует upload файла в их storage и получения URL
+        # fal_client.upload() принимает bytes напрямую, не BytesIO
+        # Upload файла в FAL storage и получаем URL (synchronous, не async)
+        image_url = fal_client.upload(image_bytes, content_type="image/jpeg")
+        
+        # Проверяем, что URL получен
+        if not image_url:
+            raise HTTPException(status_code=500, detail="FAL: Failed to upload image, no URL returned")
+        
+        logging.info(f"FAL Object Removal image uploaded, URL: {image_url[:100]}...")
+        
+        # Подготавливаем аргументы для fal-ai/image-editing/object-removal
+        arguments = {
+            "image_url": image_url
+        }
+        
+        # Используем fal_client.subscribe() для синхронной обработки
+        # FAL_KEY должен быть установлен в окружении (загружается из .env или Railway variables)
+        def on_queue_update(update):
+            if isinstance(update, fal_client.InProgress):
+                for log in update.logs:
+                    logging.info(f"FAL Object Removal log: {log.get('message', '')}")
+        
+        result = fal_client.subscribe(
+            "fal-ai/image-editing/object-removal",
+            arguments=arguments,
+            with_logs=True,
+            on_queue_update=on_queue_update,
+        )
+        
+        # Логируем результат для отладки
+        logging.info(f"FAL Object Removal result type: {type(result)}, content: {str(result)[:200] if result else 'None'}")
+        
+        # Получаем URL результата
+        # FAL возвращает {"image": {"url": "...", ...}} или {"image": "url_string"}
+        result_url = None
+        if isinstance(result, dict):
+            if "image" in result:
+                image_data = result["image"]
+                # Если image это объект с url
+                if isinstance(image_data, dict) and "url" in image_data:
+                    result_url = image_data["url"]
+                # Если image это строка (URL)
+                elif isinstance(image_data, str):
+                    result_url = image_data
+            elif "output" in result:
+                output_data = result["output"]
+                if isinstance(output_data, dict) and "url" in output_data:
+                    result_url = output_data["url"]
+                elif isinstance(output_data, str):
+                    result_url = output_data
+            elif "images" in result and len(result["images"]) > 0:
+                first_image = result["images"][0]
+                if isinstance(first_image, dict) and "url" in first_image:
+                    result_url = first_image["url"]
+                elif isinstance(first_image, str):
+                    result_url = first_image
+        elif isinstance(result, str):
+            result_url = result
+        
+        if not result_url:
+            logging.error(f"FAL Object Removal result structure: {result}")
+            raise HTTPException(status_code=500, detail=f"FAL Object Removal: No image URL in result. Result: {str(result)[:500]}")
+        
+        # Скачиваем результат
+        async with httpx.AsyncClient() as client:
+            response = await client.get(result_url, timeout=60.0)
+            if response.status_code != 200:
+                raise HTTPException(status_code=500, detail=f"Failed to download FAL Object Removal result: {response.status_code}")
+            return response.content
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"FAL Object Removal processing error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"FAL Object Removal processing error: {str(e)}")
+
 # Модели
 MODELS = {
     "removebg": process_removebg,
     "clipdrop": process_clipdrop,
     "replicate": process_replicate,
-    "fal": process_fal
+    "fal": process_fal,
+    "fal_object_removal": process_fal_object_removal
 }
 
 def get_api_key(model: str, api_key_from_request: Optional[str] = None) -> str:
@@ -238,6 +327,7 @@ def get_api_key(model: str, api_key_from_request: Optional[str] = None) -> str:
         "clipdrop": os.getenv("CLIPDROP_API_KEY"),
         "replicate": os.getenv("REPLICATE_API_KEY"),
         "fal": os.getenv("FAL_KEY"),
+        "fal_object_removal": os.getenv("FAL_KEY"),  # Использует тот же ключ что и FAL
     }
     
     return env_keys.get(model) or ""

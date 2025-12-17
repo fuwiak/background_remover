@@ -1204,7 +1204,14 @@ class App {
         document.querySelectorAll('.api-key-save').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const model = e.target.dataset.model;
-                const inputId = `apiKey${model.charAt(0).toUpperCase() + model.slice(1)}`;
+                const modelInputMap = {
+                    'removebg': 'apiKeyRemovebg',
+                    'clipdrop': 'apiKeyClipdrop',
+                    'replicate': 'apiKeyReplicate',
+                    'fal': 'apiKeyFal',
+                    'fal_object_removal': 'apiKeyFalObjectRemoval'
+                };
+                const inputId = modelInputMap[model] || `apiKey${model.charAt(0).toUpperCase() + model.slice(1)}`;
                 const input = document.getElementById(inputId);
                 const apiKey = input.value.trim();
                 
@@ -1212,6 +1219,7 @@ class App {
                     this.modelManager.saveApiKey(model, apiKey);
                     this.showMessage(`API ключ для ${model} сохранен`, 'success');
                     input.value = ''; // Очищаем поле после сохранения
+                    input.placeholder = `**** (сохранен)`;
                 } else {
                     this.showError('Введите API ключ');
                 }
@@ -1220,11 +1228,17 @@ class App {
     }
 
     loadApiKeysFromStorage() {
-        const models = ['removebg', 'clipdrop', 'replicate', 'fal'];
-        models.forEach(model => {
+        const modelInputMap = {
+            'removebg': 'apiKeyRemovebg',
+            'clipdrop': 'apiKeyClipdrop',
+            'replicate': 'apiKeyReplicate',
+            'fal': 'apiKeyFal',
+            'fal_object_removal': 'apiKeyFalObjectRemoval'
+        };
+        
+        Object.entries(modelInputMap).forEach(([model, inputId]) => {
             const key = this.modelManager.getApiKey(model);
             if (key) {
-                const inputId = `apiKey${model.charAt(0).toUpperCase() + model.slice(1)}`;
                 const input = document.getElementById(inputId);
                 if (input) {
                     // Скрываем ключ за ** для безопасности
