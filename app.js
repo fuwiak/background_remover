@@ -1035,7 +1035,14 @@ class App {
         document.getElementById('changeResolutionBtn').style.display = 'none';
         document.getElementById('placeOnBackgroundBtn').style.display = 'none';
         document.getElementById('processedImageDimensions').style.display = 'none';
-        document.getElementById('backgroundImage').style.display = 'none';
+        const backgroundImg = document.getElementById('backgroundImage');
+        if (backgroundImg) {
+            backgroundImg.style.display = 'none';
+        }
+        const backgroundPlaceholder = document.getElementById('backgroundPlaceholder');
+        if (backgroundPlaceholder) {
+            backgroundPlaceholder.style.display = 'block';
+        }
         document.getElementById('downloadBackgroundBtn').style.display = 'none';
         document.getElementById('backgroundImageDimensions').style.display = 'none';
         this.processedImageBlob = null;
@@ -1365,6 +1372,10 @@ class App {
             // Отображение результата
             const url = URL.createObjectURL(blob);
             const backgroundImg = document.getElementById('backgroundImage');
+            const backgroundPlaceholder = document.getElementById('backgroundPlaceholder');
+            if (backgroundPlaceholder) {
+                backgroundPlaceholder.style.display = 'none';
+            }
             backgroundImg.src = url;
             backgroundImg.style.display = 'block';
             
