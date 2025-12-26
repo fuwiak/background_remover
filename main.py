@@ -81,7 +81,7 @@ async def process_clipdrop(image_bytes: bytes, api_key: str) -> bytes:
         return response.content
 
 async def process_replicate(image_bytes: bytes, api_key: str) -> bytes:
-    """Replicate API используя 851-labs/background-remover"""
+    """Replicate API с fallback на два модели: 851-labs/background-remover (primary) i lucataco/remove-bg (fallback)"""
     # Используем REPLICATE_API_KEY из .env если не передан ключ
     if not api_key:
         api_key = os.getenv("REPLICATE_API_KEY", "")
@@ -92,6 +92,8 @@ async def process_replicate(image_bytes: bytes, api_key: str) -> bytes:
     # Устанавливаем API ключ для replicate
     os.environ["REPLICATE_API_TOKEN"] = api_key
     
+    # Загружаем изображение в replicate storage через files.create()
+    # files.create() синхронный, используем asyncio.to_thread() для async
     try:
         # Загружаем изображение в replicate storage через files.create()
         # files.create() синхронный, используем asyncio.to_thread() для async
@@ -107,46 +109,81 @@ async def process_replicate(image_bytes: bytes, api_key: str) -> bytes:
             raise HTTPException(status_code=500, detail="Replicate: Failed to upload image, no URL returned")
         
         logging.info(f"Replicate image uploaded, URL: {image_url[:100]}...")
+    except Exception as e:
+        logging.error(f"Replicate file upload error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Replicate file upload error: {str(e)}")
+    
+    # Список моделей для попытки (primary и fallback)
+    models = [
+        {
+            "name": "851-labs/background-remover",
+            "full_id": "851-labs/background-remover:a029dff38972b5fda4ec5d75d7d1cd25aeff621d2cf4946a41055d7db66b80bc"
+        },
+        {
+            "name": "lucataco/remove-bg",
+            "full_id": "lucataco/remove-bg:95fcc2a26d3899cd6c2691c900465aaeff466285a65c14638cc5f36f34befaf1"
+        }
+    ]
+    
+    # Пробуем каждый модель, используя первый успешный
+    last_error = None
+    for idx, model_info in enumerate(models):
+        try:
+            logging.info(f"Trying Replicate model {idx + 1}/{len(models)}: {model_info['name']}")
+            
+            # Используем replicate.run с моделью и URL изображения
+            # replicate.run() синхронный, используем asyncio.to_thread() для async
+            output = await asyncio.to_thread(
+                replicate.run,
+                model_info['full_id'],
+                input={"image": image_url}
+            )
+            
+            logging.info(f"Replicate model {model_info['name']} succeeded, output type: {type(output)}")
+            
+            # output может быть файловым объектом или URL
+            if hasattr(output, 'read'):
+                # Если это файловый объект
+                result_bytes = output.read()
+            elif hasattr(output, 'url'):
+                # Если это объект с URL
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(output.url, timeout=60.0)
+                    if response.status_code != 200:
+                        raise HTTPException(status_code=500, detail=f"Failed to download Replicate result: {response.status_code}")
+                    result_bytes = response.content
+            elif isinstance(output, str):
+                # Если это строка URL
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(output, timeout=60.0)
+                    if response.status_code != 200:
+                        raise HTTPException(status_code=500, detail=f"Failed to download Replicate result: {response.status_code}")
+                    result_bytes = response.content
+            else:
+                raise HTTPException(status_code=500, detail=f"Unexpected Replicate output format: {type(output)}")
+            
+            # Успешно получили результат
+            logging.info(f"Replicate processing completed successfully using model: {model_info['name']}")
+            return result_bytes
+            
+        except HTTPException:
+            # HTTPException пробрасываем дальше без fallback
+            raise
+        except Exception as e:
+            # Сохраняем ошибку и пробуем следующий модель
+            last_error = e
+            logging.warning(f"Replicate model {model_info['name']} failed: {str(e)}, trying next model...")
+            continue
+    
+    # Если все модели не удались, выбрасываем последнюю ошибку
+    if last_error:
+        logging.error(f"All Replicate models failed. Last error: {str(last_error)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"All Replicate models failed. Last error: {str(last_error)}")
+    else:
+        raise HTTPException(status_code=500, detail="All Replicate models failed without error details")
         
         # Используем replicate.run с новым моделью и URL изображения
         # replicate.run() синхронный, но możemy użyć asyncio.to_thread() dla async
-        output = await asyncio.to_thread(
-            replicate.run,
-            "851-labs/background-remover:a029dff38972b5fda4ec5d75d7d1cd25aeff621d2cf4946a41055d7db66b80bc",
-            input={"image": image_url}
-        )
-        
-        logging.info(f"Replicate output type: {type(output)}")
-        
-        # output может быть файловым объектом или URL
-        if hasattr(output, 'read'):
-            # Если это файловый объект
-            result_bytes = output.read()
-        elif hasattr(output, 'url'):
-            # Если это объект с URL
-            async with httpx.AsyncClient() as client:
-                response = await client.get(output.url, timeout=60.0)
-                if response.status_code != 200:
-                    raise HTTPException(status_code=500, detail=f"Failed to download Replicate result: {response.status_code}")
-                result_bytes = response.content
-        elif isinstance(output, str):
-            # Если это строка URL
-            async with httpx.AsyncClient() as client:
-                response = await client.get(output, timeout=60.0)
-                if response.status_code != 200:
-                    raise HTTPException(status_code=500, detail=f"Failed to download Replicate result: {response.status_code}")
-                result_bytes = response.content
-        else:
-            raise HTTPException(status_code=500, detail=f"Unexpected Replicate output format: {type(output)}")
-        
-        return result_bytes
-                
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Replicate processing error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Replicate processing error: {str(e)}")
-
 async def process_fal(image_bytes: bytes, api_key: str, prompt: Optional[str] = None) -> bytes:
     """FAL через fal-client используя fal-ai/imageutils/rembg"""
     import base64
