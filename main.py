@@ -102,44 +102,12 @@ async def process_replicate(image_bytes: bytes, api_key: str, prompt: Optional[s
         logging.warning(f"Error during replicate module check: {str(debug_error)}")
     
     # Устанавливаем API токен для replicate
-    # Согласно документации, replicate.run() и replicate.files используют REPLICATE_API_TOKEN из env
+    # Согласно документации, replicate.run() использует REPLICATE_API_TOKEN из env
     os.environ["REPLICATE_API_TOKEN"] = api_key
     
-    # Загружаем изображение в replicate storage через replicate.files.create()
-    # files.create() синхронный, используем asyncio.to_thread() для async
-    try:
-        # Tworzymy BytesIO object z obrazu
-        file_obj = io.BytesIO(image_bytes)
-        file_obj.name = "image.jpg"
-        
-        # Używamy replicate.files.create() bezpośrednio (nie przez client)
-        file = await asyncio.to_thread(
-            replicate.files.create,
-            file=file_obj
-        )
-        
-        # Wyciągamy URL z obiektu file - z logów widzimy że file.urls ma klucz 'get'
-        image_url = None
-        if hasattr(file, 'urls') and isinstance(file.urls, dict):
-            # file.urls jest słownikiem z kluczem 'get' zawierającym URL
-            if 'get' in file.urls:
-                image_url = file.urls['get']
-            elif file.urls:
-                # Bierzemy pierwszy dostępny URL
-                image_url = list(file.urls.values())[0]
-        elif hasattr(file, 'url'):
-            image_url = file.url
-        elif isinstance(file, str):
-            image_url = file
-        else:
-            # Jeśli nie możemy wyciągnąć URL, używamy obiektu file bezpośrednio
-            # Niektóre modele Replicate akceptują obiekt file
-            image_url = file
-        
-        logging.info(f"Replicate image uploaded, URL type: {type(image_url).__name__}, value: {str(image_url)[:150] if image_url else 'None'}...")
-    except Exception as e:
-        logging.error(f"Replicate file upload error: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Replicate file upload error: {str(e)}")
+    # Согласно документации Replicate, можно передать file object напрямую в replicate.run()
+    # replicate.run() автоматически загрузит файл, если это необходимо
+    logging.info(f"Replicate: Preparing image file (size: {len(image_bytes)} bytes)")
     
     # Список моделей для попытки (primary и fallback)
     models = [
@@ -163,28 +131,31 @@ async def process_replicate(image_bytes: bytes, api_key: str, prompt: Optional[s
         try:
             logging.info(f"Trying Replicate model {idx + 1}/{len(models)}: {model_info['name']}")
             
+            # Создаем новый BytesIO для каждой попытки (так как он может быть использован)
+            file_obj = io.BytesIO(image_bytes)
+            file_obj.name = "image.jpg"
+            
             # Подготавливаем input для модели
-            # bria/remove-background wymaga URL (URI format), nie obiektu file
-            # 851-labs/background-remover używa "image", "format", "background_type"
-            # Dla bria/remove-background musimy użyć URL string, dla innych możemy użyć obiektu file lub URL
+            # Согласно документации Replicate, можно передать file object напрямую
+            # bria/remove-background может принимать file object или URL
+            # 851-labs/background-remover и lucataco/remove-bg тоже принимают file objects
             if model_info['name'] == "bria/remove-background":
-                # bria/remove-background wymaga URL string (URI format)
-                if not isinstance(image_url, str):
-                    raise HTTPException(status_code=500, detail="bria/remove-background requires URL string, not file object")
+                # bria/remove-background принимает image как file object или URL
                 model_input = {
-                    "image": image_url
+                    "image": file_obj
                 }
             else:
-                # Inne modele mogą akceptować zarówno URL jak i obiekt file
+                # Inne modele принимают image, format i background_type
                 model_input = {
-                    "image": image_url,
+                    "image": file_obj,
                     "format": "png",
                     "background_type": "rgba"  # прозрачный фон
                 }
             
             # Используем replicate.run() - согласно документации Replicate
             # replicate.run() синхронный, используем asyncio.to_thread() для async
-            logging.info(f"Running model with input: {json.dumps(model_input, indent=2)}")
+            # Согласно документации, replicate.run() может принимать file objects напрямую
+            logging.info(f"Running model {model_info['name']} with file object (size: {len(image_bytes)} bytes)")
             output = await asyncio.to_thread(
                 replicate.run,
                 model_info['full_id'],
