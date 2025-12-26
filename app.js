@@ -351,6 +351,7 @@ class ImageProcessor {
 class App {
     constructor() {
         this.modelManager = new ModelManager();
+        this.uploadedImageDimensions = null; // Храним размеры загруженного изображения
         this.yandexDisk = new YandexDiskManager();
         this.imageProcessor = new ImageProcessor();
         this.currentFile = null;
@@ -751,12 +752,31 @@ class App {
                     processBtn.style.display = 'block';
                 }
                 
-                // Проверяем, загрузилось ли изображение
+                // Проверяем, загрузилось ли изображение и сохраняем размеры
                 const img = document.getElementById('uploadImage');
                 if (img) {
-                    img.onload = () => {
-                        console.log('Изображение успешно загружено, размер:', img.naturalWidth, 'x', img.naturalHeight);
+                    // Используем setTimeout, чтобы получить размеры после применения CSS
+                    const updateDimensions = () => {
+                        if (img.complete) {
+                            const rect = img.getBoundingClientRect();
+                            console.log('Изображение успешно загружено, размер:', img.naturalWidth, 'x', img.naturalHeight, 
+                                      'отображается:', rect.width, 'x', rect.height);
+                            // Сохраняем отображаемые размеры изображения для использования в ОБРАБОТКА
+                            this.uploadedImageDimensions = {
+                                width: rect.width,
+                                height: rect.height,
+                                naturalWidth: img.naturalWidth,
+                                naturalHeight: img.naturalHeight
+                            };
+                        }
                     };
+                    img.onload = () => {
+                        setTimeout(updateDimensions, 100); // Небольшая задержка для применения CSS
+                    };
+                    // Если изображение уже загружено
+                    if (img.complete) {
+                        setTimeout(updateDimensions, 100);
+                    }
                     img.onerror = (error) => {
                         console.error('Ошибка загрузки изображения:', error);
                         console.error('Data URL length:', e.target.result ? e.target.result.length : 0);
@@ -942,7 +962,23 @@ class App {
         
         const reader = new FileReader();
         reader.onload = (e) => {
-            document.getElementById('uploadImage').src = e.target.result;
+            const uploadImg = document.getElementById('uploadImage');
+            uploadImg.src = e.target.result;
+            // Сохраняем размеры изображения после загрузки (фактические отображаемые размеры)
+            const updateDimensions = () => {
+                if (uploadImg.complete) {
+                    const rect = uploadImg.getBoundingClientRect();
+                    this.uploadedImageDimensions = {
+                        width: rect.width,
+                        height: rect.height,
+                        naturalWidth: uploadImg.naturalWidth,
+                        naturalHeight: uploadImg.naturalHeight
+                    };
+                }
+            };
+            uploadImg.onload = () => {
+                setTimeout(updateDimensions, 100); // Небольшая задержка для применения CSS
+            };
             document.getElementById('uploadArea').style.display = 'none';
             document.getElementById('uploadPreview').style.display = 'block';
             document.getElementById('processBtn').style.display = 'block';
@@ -953,11 +989,16 @@ class App {
     clearUpload() {
         this.currentFile = null;
         this.currentFileSource = null;
+        this.uploadedImageDimensions = null;
         document.getElementById('fileInput').value = '';
         document.getElementById('uploadArea').style.display = 'flex';
         document.getElementById('uploadPreview').style.display = 'none';
         document.getElementById('processBtn').style.display = 'none';
-        document.getElementById('processedImage').style.display = 'none';
+        const processedImg = document.getElementById('processedImage');
+        processedImg.style.display = 'none';
+        // Сбрасываем размеры обработанного изображения
+        processedImg.style.width = '';
+        processedImg.style.height = '';
         document.getElementById('downloadBtn').style.display = 'none';
     }
 
@@ -1012,8 +1053,19 @@ class App {
 
             // Отображение результата
             const url = URL.createObjectURL(templateBlob);
-            document.getElementById('processedImage').src = url;
-            document.getElementById('processedImage').style.display = 'block';
+            const processedImg = document.getElementById('processedImage');
+            processedImg.src = url;
+            processedImg.style.display = 'block';
+            
+            // Устанавливаем те же размеры, что и у изображения в ЗАГРУЗКА
+            if (this.uploadedImageDimensions) {
+                processedImg.style.maxWidth = `${this.uploadedImageDimensions.width}px`;
+                processedImg.style.maxHeight = `${this.uploadedImageDimensions.height}px`;
+                processedImg.style.width = '';
+                processedImg.style.height = '';
+                processedImg.style.objectFit = 'contain';
+            }
+            
             document.getElementById('downloadBtn').style.display = 'block';
             this.processedImage = templateBlob;
 
