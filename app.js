@@ -1725,10 +1725,14 @@ class App {
         switch(type) {
             case 'start':
                 html = `<p style="color: var(--primary-color); margin: 4px 0;"><strong>[${timestamp}]</strong> ${data.message}</p>`;
+                if (progressFill && progressText && data.total_files) {
+                    progressFill.style.width = '0%';
+                    progressText.textContent = `0 / ${data.total_files} файлов`;
+                }
                 break;
             case 'folder_start':
                 html += `<p style="color: var(--text-color); margin: 4px 0; padding-left: 16px;"><strong>[${timestamp}]</strong> 📁 ${data.message}</p>`;
-                if (progressFill && progressText) {
+                if (progressFill && progressText && data.total_folders) {
                     const percent = (data.folder_index / data.total_folders) * 100;
                     progressFill.style.width = `${percent}%`;
                     progressText.textContent = `${data.folder_index} / ${data.total_folders} папок`;
@@ -1736,6 +1740,11 @@ class App {
                 break;
             case 'file_start':
                 html += `<p style="color: var(--text-color); margin: 4px 0; padding-left: 32px;"><strong>[${timestamp}]</strong> 📄 Обработка файла ${data.file_index}/${data.total_files}: ${data.file_name}</p>`;
+                if (progressFill && progressText && data.total_files) {
+                    const percent = (data.file_index / data.total_files) * 100;
+                    progressFill.style.width = `${percent}%`;
+                    progressText.textContent = `${data.file_index} / ${data.total_files} файлов`;
+                }
                 break;
             case 'processing':
                 html += `<p style="color: #4CAF50; margin: 4px 0; padding-left: 48px;"><strong>[${timestamp}]</strong> ⚙️ ${data.message}</p>`;
