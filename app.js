@@ -521,6 +521,13 @@ class App {
             // Загружаем папки
             const folders = await this.yandexDisk.getFolders();
             
+            if (!folders || folders.length === 0) {
+                select.innerHTML = '<option value="">Папки не найдены</option>';
+                select.disabled = false;
+                refreshBtn.disabled = false;
+                return;
+            }
+            
             select.innerHTML = '';
             
             // Добавляем опцию для ручного ввода
@@ -535,12 +542,14 @@ class App {
             separator.textContent = '─────────────────';
             select.appendChild(separator);
             
-            // Добавляем папки
+            // Добавляем папки (сортируем по имени)
+            const sortedFolders = [...folders].sort((a, b) => a.name.localeCompare(b.name));
             let defaultSelected = false;
-            folders.forEach(folder => {
+            
+            sortedFolders.forEach(folder => {
                 const option = document.createElement('option');
                 option.value = folder.path;
-                option.textContent = folder.name;
+                option.textContent = `📁 ${folder.name}`;
                 
                 // Устанавливаем "Тест комтех" как выбранный по умолчанию
                 if (folder.name === 'Тест комтех' && !defaultSelected) {
@@ -552,9 +561,17 @@ class App {
             });
 
             // Если "Тест комтех" не найден, выбираем первую папку
-            if (!defaultSelected && folders.length > 0) {
+            if (!defaultSelected && sortedFolders.length > 0) {
                 select.selectedIndex = 2; // Пропускаем "вручную" и разделитель
             }
+            
+            // Обновляем счетчик папок
+            const foldersCount = document.getElementById('foldersCount');
+            if (foldersCount) {
+                foldersCount.textContent = `Найдено ${sortedFolders.length} папок. Выберите папку из списка`;
+            }
+            
+            console.log(`Загружено ${sortedFolders.length} папок из Yandex Disk`);
 
         } catch (error) {
             console.error('Error loading folders:', error);
@@ -564,6 +581,7 @@ class App {
             select.disabled = false;
             refreshBtn.disabled = false;
         }
+    }
 
     async loadYandexFiles() {
         const url = document.getElementById('yandexUrlInput').value.trim();
@@ -1994,4 +2012,3 @@ Do not crop or resize the image.`;
 document.addEventListener('DOMContentLoaded', () => {
     window.app = new App();
 });
-
