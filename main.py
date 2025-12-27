@@ -6,6 +6,7 @@ import json
 import logging
 import base64
 from typing import Optional
+from datetime import datetime
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse, FileResponse
@@ -2082,30 +2083,48 @@ async def batch_process_folders(
                                 "message": f"Сохранение: {save_name}"
                             })
                             
-                            async with httpx.AsyncClient() as client:
-                                upload_link_response = await client.get(
-                                    "https://cloud-api.yandex.net/v1/disk/resources/upload",
-                                    params={"path": save_path, "overwrite": "true"},
-                                    headers={"Authorization": f"OAuth {token}"},
-                                    timeout=30.0
-                                )
+                            try:
+                                async with httpx.AsyncClient() as client:
+                                    upload_link_response = await client.get(
+                                        "https://cloud-api.yandex.net/v1/disk/resources/upload",
+                                        params={"path": save_path, "overwrite": "true"},
+                                        headers={"Authorization": f"OAuth {token}"},
+                                        timeout=30.0
+                                    )
+                                    
+                                    if upload_link_response.status_code != 200:
+                                        error_text = upload_link_response.text
+                                        logger.error(f"    Failed to get upload link for {save_path}: {upload_link_response.status_code} - {error_text}")
+                                        raise Exception(f"Failed to get upload link: {upload_link_response.status_code} - {error_text}")
+                                    
+                                    upload_url = upload_link_response.json()["href"]
+                                    upload_response = await client.put(
+                                        upload_url,
+                                        content=white_bg_bytes,
+                                        headers={"Content-Type": "image/png"},
+                                        timeout=60.0
+                                    )
+                                    
+                                    if upload_response.status_code not in [201, 202]:
+                                        error_text = upload_response.text
+                                        logger.error(f"    Failed to upload {save_name}: {upload_response.status_code} - {error_text}")
+                                        raise Exception(f"Failed to upload file: {upload_response.status_code} - {error_text}")
                                 
-                                if upload_link_response.status_code != 200:
-                                    raise Exception(f"Failed to get upload link: {upload_link_response.status_code}")
-                                
-                                upload_url = upload_link_response.json()["href"]
-                                upload_response = await client.put(
-                                    upload_url,
-                                    content=white_bg_bytes,
-                                    headers={"Content-Type": "image/png"},
-                                    timeout=60.0
-                                )
-                                
-                                if upload_response.status_code not in [201, 202]:
-                                    raise Exception(f"Failed to upload file: {upload_response.status_code}")
-                            
-                            folder_results["files_processed"] += 1
-                            logger.info(f"    Saved: {save_name}")
+                                folder_results["files_processed"] += 1
+                                logger.info(f"    ✓ Saved: {save_name} to {save_path}")
+                            except Exception as save_error:
+                                error_msg = f"Ошибка сохранения {save_name}: {str(save_error)}"
+                                logger.error(f"    {error_msg}")
+                                folder_results["errors"].append(error_msg)
+                                # Продолжаем обработку следующего файла
+                                yield await send_progress_update({
+                                    "type": "file_error",
+                                    "folder_name": folder_name,
+                                    "file_name": file_name,
+                                    "error": error_msg,
+                                    "message": f"⚠️ {error_msg}"
+                                })
+                                continue
                             
                             yield await send_progress_update({
                                 "type": "file_complete",
@@ -2268,6 +2287,7 @@ async def batch_process_folders(
             cost_logger.info(f"Background removal (удаление фона): {background_removal_count} изображений × ${COST_BACKGROUND_REMOVAL:.6f} = ${background_removal_count * COST_BACKGROUND_REMOVAL:.2f}")
             cost_logger.info(f"prunaai/p-image-edit (дизайн): {p_image_edit_count} изображений × ${COST_P_IMAGE_EDIT:.2f} = ${p_image_edit_count * COST_P_IMAGE_EDIT:.2f}")
             cost_logger.info(f"ОБЩАЯ СТОИМОСТЬ: ${total_cost:.2f}")
+            cost_logger.info(f"Дата и время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             cost_logger.info(f"=== Конец обработки ===\n")
             
             # Отправляем финальный результат

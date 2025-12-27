@@ -151,8 +151,10 @@
                         </div>
                     </div>
                     
-                    <!-- Четвертое окно - Batch Processing -->
-                    <div class="window window-batch">
+                </div>
+                    
+                    <!-- Четвертое окно - Batch Processing (full width) -->
+                    <div class="window window-batch" style="width: 100%; max-width: 100%; margin-top: 20px;">
                         <div class="window-header">
                             <span class="window-title">ПАКЕТНАЯ ОБРАБОТКА</span>
                         </div>
@@ -209,7 +211,11 @@
                                 <input type="text" id="batchOutputFolderInput" class="input" value="" placeholder="">
                                 <small style="color: var(--text-color); opacity: 0.7; display: block; margin-top: 4px;">Название папки будет автоматически: [Имя_папки]_Обработанный</small>
                             </div>
-                            <button id="startBatchProcessBtn" class="btn btn-primary">Начать обработку папок</button>
+                            <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+                                <button id="startBatchProcessBtn" class="btn btn-primary" style="flex: 1;">Начать обработку папок</button>
+                                <button id="stopBatchProcessBtn" class="btn" style="display: none; background: var(--error-color);">⏹ Остановить</button>
+                                <button id="continueBatchProcessBtn" class="btn" style="display: none; background: var(--success-color);">▶ Продолжить</button>
+                            </div>
                             <div id="batchLoadingIndicator" class="loading" style="display: none; margin-top: 16px;">
                                 <div class="spinner"></div>
                                 <p>Обработка...</p>

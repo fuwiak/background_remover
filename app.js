@@ -498,6 +498,39 @@ class App {
                 batchBasePathSelect.style.display = 'none';
             }
         });
+
+        // Кнопки Stop/Continue для пакетной обработки
+        document.getElementById('stopBatchProcessBtn').addEventListener('click', () => {
+            this.stopBatchProcessing();
+        });
+
+        document.getElementById('continueBatchProcessBtn').addEventListener('click', () => {
+            this.continueBatchProcessing();
+        });
+    }
+
+    stopBatchProcessing() {
+        this.batchProcessingStopped = true;
+        this.batchProcessingPaused = false;
+        const stopBtn = document.getElementById('stopBatchProcessBtn');
+        const continueBtn = document.getElementById('continueBatchProcessBtn');
+        stopBtn.style.display = 'none';
+        continueBtn.style.display = 'none';
+        
+        if (this.batchProcessingReader) {
+            this.batchProcessingReader.cancel();
+        }
+        
+        this.showMessage('Остановка обработки...', 'warning');
+    }
+
+    continueBatchProcessing() {
+        this.batchProcessingPaused = false;
+        const stopBtn = document.getElementById('stopBatchProcessBtn');
+        const continueBtn = document.getElementById('continueBatchProcessBtn');
+        stopBtn.style.display = 'block';
+        continueBtn.style.display = 'none';
+        this.showMessage('Обработка продолжена', 'success');
     }
 
     async loadBatchFolders() {
@@ -1477,13 +1510,22 @@ class App {
         const resultsDiv = document.getElementById('batchResults');
         const resultsContent = document.getElementById('batchResultsContent');
         const startBtn = document.getElementById('startBatchProcessBtn');
+        const stopBtn = document.getElementById('stopBatchProcessBtn');
+        const continueBtn = document.getElementById('continueBatchProcessBtn');
 
         // Показываем индикатор загрузки
         loadingIndicator.style.display = 'block';
         progressContainer.style.display = 'none';
         resultsDiv.style.display = 'none';
         startBtn.disabled = true;
+        stopBtn.style.display = 'none';
+        continueBtn.style.display = 'none';
         resultsContent.innerHTML = '';
+        
+        // Флаг для остановки/продолжения
+        this.batchProcessingPaused = false;
+        this.batchProcessingStopped = false;
+        this.batchProcessingReader = null;
 
         try {
             // Получаем API ключ (если есть в localStorage)
@@ -1517,7 +1559,9 @@ class App {
             }
 
             // Показываем контейнер прогресса
+            loadingIndicator.style.display = 'none';
             progressContainer.style.display = 'block';
+            stopBtn.style.display = 'block';
             const progressDetails = document.getElementById('batchProgressDetails');
             if (progressDetails) {
                 progressDetails.style.display = 'block';
@@ -1543,6 +1587,7 @@ class App {
 
             // Читаем streaming response (Server-Sent Events)
             const reader = response.body.getReader();
+            this.batchProcessingReader = reader;
             const decoder = new TextDecoder();
             let buffer = '';
             let progressDetailsContent = document.getElementById('batchProgressDetailsContent');
@@ -1550,6 +1595,22 @@ class App {
             
             try {
                 while (true) {
+                    // Проверяем, не остановлена ли обработка
+                    if (this.batchProcessingStopped) {
+                        await reader.cancel();
+                        break;
+                    }
+                    
+                    // Если обработка приостановлена, ждем
+                    while (this.batchProcessingPaused && !this.batchProcessingStopped) {
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                    }
+                    
+                    if (this.batchProcessingStopped) {
+                        await reader.cancel();
+                        break;
+                    }
+                    
                     const { done, value } = await reader.read();
                     if (done) break;
                     
@@ -1574,10 +1635,21 @@ class App {
                     }
                 }
             } catch (error) {
-                console.error('Error reading stream:', error);
-                throw error;
+                if (this.batchProcessingStopped) {
+                    console.log('Обработка остановлена пользователем');
+                    this.showMessage('Обработка остановлена', 'warning');
+                } else {
+                    console.error('Error reading stream:', error);
+                    throw error;
+                }
             } finally {
-                reader.releaseLock();
+                this.batchProcessingReader = null;
+                startBtn.disabled = false;
+                stopBtn.style.display = 'none';
+                continueBtn.style.display = 'none';
+                if (reader) {
+                    reader.releaseLock();
+                }
             }
             
             // Используем финальный результат
@@ -1673,6 +1745,9 @@ class App {
                 break;
             case 'file_complete':
                 html += `<p style="color: #4CAF50; margin: 4px 0; padding-left: 48px;"><strong>[${timestamp}]</strong> ✓ ${data.message}</p>`;
+                break;
+            case 'file_error':
+                html += `<p style="color: #ff6b6b; margin: 4px 0; padding-left: 48px;"><strong>[${timestamp}]</strong> ⚠️ ${data.message}</p>`;
                 break;
             case 'design_start':
                 html += `<p style="color: #FF9800; margin: 4px 0; padding-left: 48px;"><strong>[${timestamp}]</strong> 🎨 ${data.message}</p>`;
