@@ -883,9 +883,15 @@ async def get_public_yandex_files(public_url: str = Query(...)):
             match = re.search(r'/client/disk/([^/?]+)', public_url)
             if match:
                 folder_path = match.group(1)
-                # Декодируем URL-encoded путь
+                # Декодируем URL-encoded путь (если он закодирован)
                 from urllib.parse import unquote
-                folder_path = unquote(folder_path)
+                try:
+                    # Пробуем декодировать - если URL уже содержит кириллицу, unquote вернет его как есть
+                    decoded_path = unquote(folder_path)
+                    folder_path = decoded_path
+                except:
+                    # Если декодирование не удалось, используем оригинальный путь
+                    pass
                 folder_url = public_url.split('?')[0]  # Используем оригинальный URL
             else:
                 raise HTTPException(status_code=400, detail="Invalid Yandex Disk URL format. Expected /d/ID or /client/disk/PATH")
