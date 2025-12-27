@@ -1382,6 +1382,7 @@ class App {
             }
 
             // Получаем токен Yandex Disk
+            // Если токена нет в localStorage, сервер возьмет его из env variables
             const token = this.yandexDisk.accessToken || localStorage.getItem('yandex_disk_token');
 
             // Создаем FormData
@@ -1395,10 +1396,19 @@ class App {
             if (apiKey) {
                 formData.append('apiKey', apiKey);
             }
+            // Передаем токен только если он есть (если нет, сервер возьмет из env)
             if (token) {
                 formData.append('token', token);
             }
 
+            // Показываем контейнер прогресса
+            progressContainer.style.display = 'block';
+            const progressDetails = document.getElementById('batchProgressDetails');
+            if (progressDetails) {
+                progressDetails.style.display = 'block';
+                document.getElementById('batchProgressDetailsContent').innerHTML = '<p style="color: var(--text-color);">Начало обработки...</p>';
+            }
+            
             // Отправляем запрос
             const response = await fetch('/api/batch-process-folders', {
                 method: 'POST',
@@ -1406,11 +1416,61 @@ class App {
             });
 
             if (!response.ok) {
-                const errorData = await response.json();
+                const errorText = await response.text();
+                let errorData;
+                try {
+                    errorData = JSON.parse(errorText);
+                } catch {
+                    errorData = { detail: errorText || 'Ошибка обработки' };
+                }
                 throw new Error(errorData.detail || 'Ошибка обработки');
             }
 
-            const result = await response.json();
+            // Читаем streaming response (Server-Sent Events)
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let progressDetailsContent = document.getElementById('batchProgressDetailsContent');
+            let finalResult = null;
+            
+            try {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+                                this.updateProgress(data, progressDetailsContent, progressFill, progressText);
+                                
+                                // Сохраняем финальный результат
+                                if (data.type === 'complete') {
+                                    finalResult = data;
+                                }
+                            } catch (e) {
+                                console.error('Error parsing progress:', e, line);
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Error reading stream:', error);
+                throw error;
+            } finally {
+                reader.releaseLock();
+            }
+            
+            // Используем финальный результат
+            if (!finalResult) {
+                throw new Error('Не получен финальный результат обработки');
+            }
+            
+            const result = finalResult;
 
             // Скрываем индикатор загрузки
             loadingIndicator.style.display = 'none';
@@ -1466,6 +1526,62 @@ class App {
         }
         const byteArray = new Uint8Array(byteNumbers);
         return new Blob([byteArray], { type: mimeType });
+    }
+
+    updateProgress(data, progressDetailsContent, progressFill, progressText) {
+        if (!progressDetailsContent) return;
+        
+        const type = data.type;
+        let html = progressDetailsContent.innerHTML;
+        const timestamp = new Date().toLocaleTimeString('ru-RU');
+        
+        switch(type) {
+            case 'start':
+                html = `<p style="color: var(--primary-color); margin: 4px 0;"><strong>[${timestamp}]</strong> ${data.message}</p>`;
+                break;
+            case 'folder_start':
+                html += `<p style="color: var(--text-color); margin: 4px 0; padding-left: 16px;"><strong>[${timestamp}]</strong> 📁 ${data.message}</p>`;
+                if (progressFill && progressText) {
+                    const percent = (data.folder_index / data.total_folders) * 100;
+                    progressFill.style.width = `${percent}%`;
+                    progressText.textContent = `${data.folder_index} / ${data.total_folders} папок`;
+                }
+                break;
+            case 'file_start':
+                html += `<p style="color: var(--text-color); margin: 4px 0; padding-left: 32px;"><strong>[${timestamp}]</strong> 📄 Обработка файла ${data.file_index}/${data.total_files}: ${data.file_name}</p>`;
+                break;
+            case 'processing':
+                html += `<p style="color: #4CAF50; margin: 4px 0; padding-left: 48px;"><strong>[${timestamp}]</strong> ⚙️ ${data.message}</p>`;
+                break;
+            case 'saving':
+                html += `<p style="color: #2196F3; margin: 4px 0; padding-left: 48px;"><strong>[${timestamp}]</strong> 💾 ${data.message}</p>`;
+                break;
+            case 'file_complete':
+                html += `<p style="color: #4CAF50; margin: 4px 0; padding-left: 48px;"><strong>[${timestamp}]</strong> ✓ ${data.message}</p>`;
+                break;
+            case 'design_start':
+                html += `<p style="color: #FF9800; margin: 4px 0; padding-left: 48px;"><strong>[${timestamp}]</strong> 🎨 ${data.message}</p>`;
+                break;
+            case 'design_complete':
+                html += `<p style="color: #4CAF50; margin: 4px 0; padding-left: 48px;"><strong>[${timestamp}]</strong> ✓ ${data.message}</p>`;
+                break;
+            case 'folder_complete':
+                html += `<p style="color: #4CAF50; margin: 4px 0; padding-left: 16px;"><strong>[${timestamp}]</strong> ✓ ${data.message}</p>`;
+                break;
+            case 'folder_error':
+                html += `<p style="color: #f44336; margin: 4px 0; padding-left: 16px;"><strong>[${timestamp}]</strong> ✗ ${data.message}</p>`;
+                break;
+            case 'complete':
+                html += `<p style="color: var(--primary-color); margin: 8px 0 0 0; font-weight: bold;"><strong>[${timestamp}]</strong> ✅ ${data.message}</p>`;
+                if (progressFill && progressText) {
+                    progressFill.style.width = '100%';
+                    progressText.textContent = `${data.folders_processed} / ${data.folders_processed} папок`;
+                }
+                break;
+        }
+        
+        progressDetailsContent.innerHTML = html;
+        progressDetailsContent.scrollTop = progressDetailsContent.scrollHeight;
     }
 
     downloadProcessed() {

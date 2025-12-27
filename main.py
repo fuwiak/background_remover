@@ -9,6 +9,7 @@ from typing import Optional
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse, FileResponse
+import json as json_lib
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 import httpx
@@ -1679,6 +1680,10 @@ async def batch_process_products(
         logger.error(f"Error in batch processing: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Batch processing error: {str(e)}")
 
+async def send_progress_update(message: dict):
+    """Helper function to format progress update as SSE"""
+    return f"data: {json_lib.dumps(message, ensure_ascii=False)}\n\n"
+
 @app.post("/api/batch-process-folders")
 async def batch_process_folders(
     base_path: str = Form("/"),
@@ -1708,12 +1713,18 @@ async def batch_process_folders(
     p_image_edit_count = 0
     
     try:
-        # Получаем токен
+        # Получаем токен (из запроса или env variables)
         if not token:
             token = os.getenv("YANDEX_DISK_TOKEN")
         
         if not token:
-            raise HTTPException(status_code=401, detail="Yandex Disk token not provided")
+            logger.error("Yandex Disk token not found in request or environment variables")
+            raise HTTPException(
+                status_code=401, 
+                detail="Yandex Disk token not provided. Please authenticate via Yandex Disk OAuth or set YANDEX_DISK_TOKEN in Railway variables."
+            )
+        
+        logger.info(f"Using Yandex Disk token: {'from request' if token != os.getenv('YANDEX_DISK_TOKEN') else 'from env variables'}")
         
         # Получаем API ключ
         api_key = get_api_key(model, apiKey)
@@ -1735,16 +1746,60 @@ async def batch_process_folders(
                 )
         
         # Получаем список папок
+        logger.info(f"Fetching folders from Yandex Disk, path: {base_path}")
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                "https://cloud-api.yandex.net/v1/disk/resources",
-                params={"path": base_path, "limit": 1000},
-                headers={"Authorization": f"OAuth {token}"},
-                timeout=30.0
-            )
-            
-            if response.status_code != 200:
-                raise HTTPException(status_code=response.status_code, detail="Failed to fetch folders")
+            try:
+                response = await client.get(
+                    "https://cloud-api.yandex.net/v1/disk/resources",
+                    params={"path": base_path, "limit": 1000},
+                    headers={"Authorization": f"OAuth {token}"},
+                    timeout=30.0
+                )
+                
+                logger.info(f"Yandex Disk API response status: {response.status_code}")
+                
+                if response.status_code != 200:
+                    try:
+                        error_json = response.json()
+                        error_text = str(error_json)
+                    except:
+                        error_text = response.text
+                    
+                    logger.error(f"Yandex Disk API error: {response.status_code}, response: {error_text}")
+                    
+                    if response.status_code == 401:
+                        raise HTTPException(
+                            status_code=401, 
+                            detail="Yandex Disk authentication failed. Token is invalid or expired. Please re-authenticate via OAuth or check YANDEX_DISK_TOKEN in Railway variables."
+                        )
+                    elif response.status_code == 403:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Access forbidden. Check if the token has proper permissions to access Yandex Disk."
+                        )
+                    elif response.status_code == 404:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"Path not found: {base_path}. Please check if the path exists on Yandex Disk."
+                        )
+                    elif response.status_code == 405:
+                        raise HTTPException(
+                            status_code=405,
+                            detail="Method not allowed. This might indicate an issue with Yandex Disk API. Please check the token and try again."
+                        )
+                    else:
+                        raise HTTPException(
+                            status_code=response.status_code,
+                            detail=f"Yandex Disk API error ({response.status_code}): {error_text[:300]}"
+                        )
+            except httpx.RequestError as e:
+                logger.error(f"Request error when fetching folders: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Network error when accessing Yandex Disk: {str(e)}")
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error when fetching folders: {str(e)}", exc_info=True)
+                raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
             
             data = response.json()
             folders = [
@@ -1757,266 +1812,395 @@ async def batch_process_folders(
         cost_logger.info(f"=== Начало обработки {len(folders)} папок ===")
         cost_logger.info(f"Базовый путь: {base_path}, Размер выходных изображений: {width}x{height}")
         
-        results = []
-        
-        # Обрабатываем каждую папку
-        for folder_idx, folder in enumerate(folders, 1):
-            folder_name = folder["name"]
-            folder_path = folder["path"]
+        # Создаем async generator для streaming response
+        async def generate_progress():
+            results = []
             
-            logger.info(f"Processing folder {folder_idx}/{len(folders)}: {folder_name}")
-            cost_logger.info(f"--- Обработка папки {folder_idx}/{len(folders)}: {folder_name} ---")
+            # Отправляем начальное сообщение
+            yield await send_progress_update({
+                "type": "start",
+                "total_folders": len(folders),
+                "message": f"Начало обработки {len(folders)} папок"
+            })
             
-            try:
-                # Получаем файлы из папки
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(
-                        "https://cloud-api.yandex.net/v1/disk/resources",
-                        params={"path": folder_path, "limit": 1000},
-                        headers={"Authorization": f"OAuth {token}"},
-                        timeout=30.0
-                    )
-                    
-                    if response.status_code != 200:
-                        logger.warning(f"Failed to fetch files from folder {folder_name}: {response.status_code}")
-                        continue
-                    
-                    data = response.json()
-                    files = [
-                        item for item in data.get("_embedded", {}).get("items", [])
-                        if item.get("type") == "file" and item.get("mime_type", "").startswith("image/")
-                    ]
-                    
-                    # Сортируем файлы по имени и берем первые 5
-                    files.sort(key=lambda x: x.get("name", ""))
-                    files = files[:5]
-                    
-                    if len(files) < 5:
-                        logger.warning(f"Folder {folder_name} has only {len(files)} images, expected 5")
+            # Обрабатываем каждую папку
+            for folder_idx, folder in enumerate(folders, 1):
+                folder_name = folder["name"]
+                folder_path = folder["path"]
                 
-                # Создаем папку для результатов
-                output_path = f"{folder_path}/{output_folder}"
-                async with httpx.AsyncClient() as client:
-                    response = await client.put(
-                        "https://cloud-api.yandex.net/v1/disk/resources",
-                        params={"path": output_path},
-                        headers={"Authorization": f"OAuth {token}"},
-                        timeout=30.0
-                    )
-                    # Игнорируем ошибку если папка уже существует
+                logger.info(f"Processing folder {folder_idx}/{len(folders)}: {folder_name}")
+                cost_logger.info(f"--- Обработка папки {folder_idx}/{len(folders)}: {folder_name} ---")
                 
-                folder_results = {
+                # Отправляем информацию о начале обработки папки
+                yield await send_progress_update({
+                    "type": "folder_start",
+                    "folder_index": folder_idx,
+                    "total_folders": len(folders),
+                    "folder_name": folder_name,
+                    "message": f"Обработка папки {folder_idx}/{len(folders)}: {folder_name}"
+                })
+                
+                try:
+                    # Получаем файлы из папки
+                    async with httpx.AsyncClient() as client:
+                        response = await client.get(
+                            "https://cloud-api.yandex.net/v1/disk/resources",
+                            params={"path": folder_path, "limit": 1000},
+                            headers={"Authorization": f"OAuth {token}"},
+                            timeout=30.0
+                        )
+                        
+                        if response.status_code != 200:
+                            logger.warning(f"Failed to fetch files from folder {folder_name}: {response.status_code}")
+                            continue
+                        
+                        data = response.json()
+                        files = [
+                            item for item in data.get("_embedded", {}).get("items", [])
+                            if item.get("type") == "file" and item.get("mime_type", "").startswith("image/")
+                        ]
+                        
+                        # Сортируем файлы по имени и берем первые 5
+                        files.sort(key=lambda x: x.get("name", ""))
+                        files = files[:5]
+                        
+                        if len(files) < 5:
+                            logger.warning(f"Folder {folder_name} has only {len(files)} images, expected 5")
+                    
+                    # Создаем папку для результатов
+                    output_path = f"{folder_path}/{output_folder}"
+                    async with httpx.AsyncClient() as client:
+                        response = await client.put(
+                            "https://cloud-api.yandex.net/v1/disk/resources",
+                            params={"path": output_path},
+                            headers={"Authorization": f"OAuth {token}"},
+                            timeout=30.0
+                        )
+                        # Игнорируем ошибку если папка уже существует
+                    
+                    folder_results = {
                     "folder_name": folder_name,
                     "folder_path": folder_path,
                     "files_processed": 0,
                     "design_created": False,
                     "errors": []
-                }
-                
-                # Обрабатываем каждое фото
-                for file_idx, file_info in enumerate(files):
-                    try:
-                        file_name = file_info.get("name", "")
-                        file_path = file_info.get("path", "")
-                        
-                        logger.info(f"  Processing file {file_idx + 1}/5: {file_name}")
-                        
-                        # Скачиваем файл
-                        async with httpx.AsyncClient() as client:
-                            link_response = await client.get(
-                                "https://cloud-api.yandex.net/v1/disk/resources/download",
-                                params={"path": file_path},
-                                headers={"Authorization": f"OAuth {token}"},
-                                timeout=30.0
-                            )
+                    }
+                    
+                    # Обрабатываем каждое фото
+                    for file_idx, file_info in enumerate(files):
+                        try:
+                            file_name = file_info.get("name", "")
+                            file_path = file_info.get("path", "")
                             
-                            if link_response.status_code != 200:
-                                raise Exception(f"Failed to get download link: {link_response.status_code}")
+                            logger.info(f"  Processing file {file_idx + 1}/5: {file_name}")
                             
-                            download_url = link_response.json()["href"]
-                            file_response = await client.get(download_url, timeout=60.0, follow_redirects=True)
+                            # Отправляем информацию о начале обработки файла
+                            yield await send_progress_update({
+                                "type": "file_start",
+                                "folder_name": folder_name,
+                                "folder_index": folder_idx,
+                                "file_index": file_idx + 1,
+                                "total_files": len(files),
+                                "file_name": file_name,
+                                "message": f"Обработка файла {file_idx + 1}/{len(files)}: {file_name}"
+                            })
                             
-                            if file_response.status_code != 200:
-                                raise Exception(f"Failed to download file: {file_response.status_code}")
-                            
-                            image_bytes = file_response.content
-                        
-                        # Обрабатываем через удаление фона
-                        processed_bytes = await MODELS[model](image_bytes, api_key, None)
-                        background_removal_count += 1
-                        
-                        # Размещаем на белом фоне с заданным размером
-                        processed_img = Image.open(io.BytesIO(processed_bytes))
-                        template_width = max(100, min(5000, width))
-                        template_height = max(100, min(5000, height))
-                        template_img = Image.new("RGB", (template_width, template_height), "white")
-                        
-                        img_width, img_height = processed_img.size
-                        scale_width = template_width / img_width
-                        scale_height = template_height / img_height
-                        scale = min(scale_width, scale_height)
-                        
-                        new_width = int(img_width * scale)
-                        new_height = int(img_height * scale)
-                        processed_img = processed_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                        
-                        x = (template_width - new_width) // 2
-                        y = (template_height - new_height) // 2
-                        
-                        result = template_img.copy()
-                        if processed_img.mode == "RGBA":
-                            result.paste(processed_img, (x, y), processed_img)
-                        else:
-                            result.paste(processed_img, (x, y))
-                        
-                        # Сохраняем в bytes
-                        output = io.BytesIO()
-                        result.save(output, format="PNG")
-                        output.seek(0)
-                        white_bg_bytes = output.read()
-                        
-                        # Сохраняем на Yandex Disk
-                        save_name = f"{file_name.rsplit('.', 1)[0]}_processed.png"
-                        save_path = f"{output_path}/{save_name}"
-                        
-                        async with httpx.AsyncClient() as client:
-                            upload_link_response = await client.get(
-                                "https://cloud-api.yandex.net/v1/disk/resources/upload",
-                                params={"path": save_path, "overwrite": "true"},
-                                headers={"Authorization": f"OAuth {token}"},
-                                timeout=30.0
-                            )
-                            
-                            if upload_link_response.status_code != 200:
-                                raise Exception(f"Failed to get upload link: {upload_link_response.status_code}")
-                            
-                            upload_url = upload_link_response.json()["href"]
-                            upload_response = await client.put(
-                                upload_url,
-                                content=white_bg_bytes,
-                                headers={"Content-Type": "image/png"},
-                                timeout=60.0
-                            )
-                            
-                            if upload_response.status_code not in [201, 202]:
-                                raise Exception(f"Failed to upload file: {upload_response.status_code}")
-                        
-                        folder_results["files_processed"] += 1
-                        logger.info(f"    Saved: {save_name}")
-                        
-                        # Для первой фотографии создаем версию с дизайном
-                        if file_idx == 0:
-                            try:
-                                # Получаем путь к фону
-                                background_paths = [
-                                    "/app/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg",
-                                    os.path.expanduser("~/background_remover/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg"),
-                                    "./background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg",
-                                    "background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg"
-                                ]
+                            # Скачиваем файл
+                            async with httpx.AsyncClient() as client:
+                                link_response = await client.get(
+                                    "https://cloud-api.yandex.net/v1/disk/resources/download",
+                                    params={"path": file_path},
+                                    headers={"Authorization": f"OAuth {token}"},
+                                    timeout=30.0
+                                )
                                 
-                                background_path = None
-                                for path in background_paths:
-                                    if os.path.exists(path):
-                                        background_path = path
-                                        break
+                                if link_response.status_code != 200:
+                                    raise Exception(f"Failed to get download link: {link_response.status_code}")
                                 
-                                if background_path:
-                                    with open(background_path, 'rb') as f:
-                                        background_bytes = f.read()
+                                download_url = link_response.json()["href"]
+                                file_response = await client.get(download_url, timeout=60.0, follow_redirects=True)
+                                
+                                if file_response.status_code != 200:
+                                    raise Exception(f"Failed to download file: {file_response.status_code}")
+                                
+                                image_bytes = file_response.content
+                            
+                            # Обрабатываем через удаление фона
+                            yield await send_progress_update({
+                            "type": "processing",
+                            "folder_name": folder_name,
+                            "file_name": file_name,
+                            "step": "background_removal",
+                                "message": f"Удаление фона: {file_name}"
+                            })
+                            
+                            processed_bytes = await MODELS[model](image_bytes, api_key, None)
+                            background_removal_count += 1
+                            
+                            # Размещаем на белом фоне с заданным размером
+                            processed_img = Image.open(io.BytesIO(processed_bytes))
+                            template_width = max(100, min(5000, width))
+                            template_height = max(100, min(5000, height))
+                            template_img = Image.new("RGB", (template_width, template_height), "white")
+                            
+                            img_width, img_height = processed_img.size
+                            scale_width = template_width / img_width
+                            scale_height = template_height / img_height
+                            scale = min(scale_width, scale_height)
+                            
+                            new_width = int(img_width * scale)
+                            new_height = int(img_height * scale)
+                            processed_img = processed_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                            
+                            x = (template_width - new_width) // 2
+                            y = (template_height - new_height) // 2
+                            
+                            result = template_img.copy()
+                            if processed_img.mode == "RGBA":
+                                result.paste(processed_img, (x, y), processed_img)
+                            else:
+                                result.paste(processed_img, (x, y))
+                            
+                            # Сохраняем в bytes
+                            output = io.BytesIO()
+                            result.save(output, format="PNG")
+                            output.seek(0)
+                            white_bg_bytes = output.read()
+                            
+                            # Сохраняем на Yandex Disk
+                            save_name = f"{file_name.rsplit('.', 1)[0]}_processed.png"
+                            save_path = f"{output_path}/{save_name}"
+                            
+                            yield await send_progress_update({
+                                "type": "saving",
+                                "folder_name": folder_name,
+                                "file_name": file_name,
+                                "saved_name": save_name,
+                                "save_path": save_path,
+                                "message": f"Сохранение: {save_name}"
+                            })
+                            
+                            async with httpx.AsyncClient() as client:
+                                upload_link_response = await client.get(
+                                    "https://cloud-api.yandex.net/v1/disk/resources/upload",
+                                    params={"path": save_path, "overwrite": "true"},
+                                    headers={"Authorization": f"OAuth {token}"},
+                                    timeout=30.0
+                                )
+                                
+                                if upload_link_response.status_code != 200:
+                                    raise Exception(f"Failed to get upload link: {upload_link_response.status_code}")
+                                
+                                upload_url = upload_link_response.json()["href"]
+                                upload_response = await client.put(
+                                    upload_url,
+                                    content=white_bg_bytes,
+                                    headers={"Content-Type": "image/png"},
+                                    timeout=60.0
+                                )
+                                
+                                if upload_response.status_code not in [201, 202]:
+                                    raise Exception(f"Failed to upload file: {upload_response.status_code}")
+                            
+                            folder_results["files_processed"] += 1
+                            logger.info(f"    Saved: {save_name}")
+                            
+                            yield await send_progress_update({
+                                "type": "file_complete",
+                                "folder_name": folder_name,
+                                "file_name": file_name,
+                                "saved_name": save_name,
+                                "message": f"✓ Файл обработан и сохранен: {save_name}"
+                            })
+                            
+                            # Для первой фотографии создаем версию с дизайном
+                            if file_idx == 0:
+                                try:
+                                    # Получаем путь к фону
+                                    background_paths = [
+                                        "/app/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg",
+                                        os.path.expanduser("~/background_remover/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg"),
+                                        "./background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg",
+                                        "background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg"
+                                    ]
                                     
-                                    processed_file_obj = io.BytesIO(processed_bytes)
-                                    processed_file_obj.name = "processed.png"
-                                    background_file_obj = io.BytesIO(background_bytes)
-                                    background_file_obj.name = "background.jpeg"
+                                    background_path = None
+                                    for path in background_paths:
+                                        if os.path.exists(path):
+                                            background_path = path
+                                            break
                                     
-                                    os.environ["REPLICATE_API_TOKEN"] = api_key
-                                    
-                                    default_prompt = """Add the product from @img2 to the image @img1. The product must levitate directly above the podium, barely touching the podium surface, with a visible contact shadow."""
-                                    
-                                    processed_file_obj.seek(0)
-                                    background_file_obj.seek(0)
-                                    
-                                    model_input = {
-                                        "images": [background_file_obj, processed_file_obj],
-                                        "prompt": default_prompt,
-                                        "aspect_ratio": "4:3"
-                                    }
-                                    
-                                    design_output = await asyncio.to_thread(
-                                        replicate.run,
-                                        "prunaai/p-image-edit",
-                                        input=model_input
-                                    )
-                                    
-                                    p_image_edit_count += 1
-                                    
-                                    design_bytes = None
-                                    if hasattr(design_output, 'read'):
-                                        design_bytes = design_output.read()
-                                    elif isinstance(design_output, str):
-                                        async with httpx.AsyncClient() as http_client:
-                                            response = await http_client.get(design_output, timeout=60.0)
-                                            if response.status_code == 200:
-                                                design_bytes = response.content
-                                    elif isinstance(design_output, list) and len(design_output) > 0:
-                                        first_item = design_output[0]
-                                        if hasattr(first_item, 'read'):
-                                            design_bytes = first_item.read()
-                                        elif isinstance(first_item, str):
+                                    if background_path:
+                                        with open(background_path, 'rb') as f:
+                                            background_bytes = f.read()
+                                        
+                                        processed_file_obj = io.BytesIO(processed_bytes)
+                                        processed_file_obj.name = "processed.png"
+                                        background_file_obj = io.BytesIO(background_bytes)
+                                        background_file_obj.name = "background.jpeg"
+                                        
+                                        os.environ["REPLICATE_API_TOKEN"] = api_key
+                                        
+                                        default_prompt = """Add the product from @img2 to the image @img1. The product must levitate directly above the podium, barely touching the podium surface, with a visible contact shadow."""
+                                        
+                                        processed_file_obj.seek(0)
+                                        background_file_obj.seek(0)
+                                        
+                                        model_input = {
+                                            "images": [background_file_obj, processed_file_obj],
+                                            "prompt": default_prompt,
+                                            "aspect_ratio": "4:3"
+                                        }
+                                        
+                                        yield await send_progress_update({
+                                            "type": "design_start",
+                                            "folder_name": folder_name,
+                                            "file_name": file_name,
+                                            "message": f"Создание дизайна для: {file_name}"
+                                        })
+                                        
+                                        design_output = await asyncio.to_thread(
+                                            replicate.run,
+                                            "prunaai/p-image-edit",
+                                            input=model_input
+                                        )
+                                        
+                                        p_image_edit_count += 1
+                                        
+                                        design_bytes = None
+                                        if hasattr(design_output, 'read'):
+                                            design_bytes = design_output.read()
+                                        elif isinstance(design_output, str):
                                             async with httpx.AsyncClient() as http_client:
-                                                response = await http_client.get(first_item, timeout=60.0)
+                                                response = await http_client.get(design_output, timeout=60.0)
                                                 if response.status_code == 200:
                                                     design_bytes = response.content
-                                    
-                                    if design_bytes:
-                                        # Сохраняем дизайн на Yandex Disk
-                                        design_name = f"{file_name.rsplit('.', 1)[0]}_design.png"
-                                        design_save_path = f"{output_path}/{design_name}"
+                                        elif isinstance(design_output, list) and len(design_output) > 0:
+                                            first_item = design_output[0]
+                                            if hasattr(first_item, 'read'):
+                                                design_bytes = first_item.read()
+                                            elif isinstance(first_item, str):
+                                                async with httpx.AsyncClient() as http_client:
+                                                    response = await http_client.get(first_item, timeout=60.0)
+                                                    if response.status_code == 200:
+                                                        design_bytes = response.content
                                         
-                                        async with httpx.AsyncClient() as client:
-                                            upload_link_response = await client.get(
-                                                "https://cloud-api.yandex.net/v1/disk/resources/upload",
-                                                params={"path": design_save_path, "overwrite": "true"},
-                                                headers={"Authorization": f"OAuth {token}"},
-                                                timeout=30.0
-                                            )
+                                        if design_bytes:
+                                            # Сохраняем дизайн на Yandex Disk
+                                            design_name = f"{file_name.rsplit('.', 1)[0]}_design.png"
+                                            design_save_path = f"{output_path}/{design_name}"
                                             
-                                            if upload_link_response.status_code == 200:
-                                                upload_url = upload_link_response.json()["href"]
-                                                upload_response = await client.put(
-                                                    upload_url,
-                                                    content=design_bytes,
-                                                    headers={"Content-Type": "image/png"},
-                                                    timeout=60.0
+                                            async with httpx.AsyncClient() as client:
+                                                upload_link_response = await client.get(
+                                                    "https://cloud-api.yandex.net/v1/disk/resources/upload",
+                                                    params={"path": design_save_path, "overwrite": "true"},
+                                                    headers={"Authorization": f"OAuth {token}"},
+                                                    timeout=30.0
                                                 )
                                                 
-                                                if upload_response.status_code in [201, 202]:
-                                                    folder_results["design_created"] = True
-                                                    logger.info(f"    Saved design: {design_name}")
+                                                if upload_link_response.status_code == 200:
+                                                    upload_url = upload_link_response.json()["href"]
+                                                    upload_response = await client.put(
+                                                        upload_url,
+                                                        content=design_bytes,
+                                                        headers={"Content-Type": "image/png"},
+                                                        timeout=60.0
+                                                    )
+                                                    
+                                                    if upload_response.status_code in [201, 202]:
+                                                        folder_results["design_created"] = True
+                                                        logger.info(f"    Saved design: {design_name}")
+                                                        
+                                                        yield await send_progress_update({
+                                                            "type": "design_complete",
+                                                            "folder_name": folder_name,
+                                                            "file_name": file_name,
+                                                            "design_name": design_name,
+                                                            "message": f"✓ Дизайн создан и сохранен: {design_name}"
+                                                        })
                                 
-                            except Exception as e:
-                                logger.warning(f"    Failed to create design for {file_name}: {str(e)}")
-                                folder_results["errors"].append(f"Design creation failed: {str(e)}")
+                                except Exception as e:
+                                    logger.warning(f"    Failed to create design for {file_name}: {str(e)}")
+                                    folder_results["errors"].append(f"Design creation failed: {str(e)}")
+                        
+                        except Exception as e:
+                            logger.error(f"    Error processing {file_info.get('name', 'unknown')}: {str(e)}")
+                            folder_results["errors"].append(f"{file_info.get('name', 'unknown')}: {str(e)}")
+                            continue
                     
-                    except Exception as e:
-                        logger.error(f"    Error processing {file_info.get('name', 'unknown')}: {str(e)}")
-                        folder_results["errors"].append(f"{file_info.get('name', 'unknown')}: {str(e)}")
-                        continue
-                
-                results.append(folder_results)
-                cost_logger.info(f"Папка {folder_name}: обработано {folder_results['files_processed']} файлов, дизайн: {'да' if folder_results['design_created'] else 'нет'}")
+                    results.append(folder_results)
+                    cost_logger.info(f"Папка {folder_name}: обработано {folder_results['files_processed']} файлов, дизайн: {'да' if folder_results['design_created'] else 'нет'}")
+                    
+                    yield await send_progress_update({
+                        "type": "folder_complete",
+                        "folder_name": folder_name,
+                        "folder_index": folder_idx,
+                        "files_processed": folder_results["files_processed"],
+                        "design_created": folder_results["design_created"],
+                        "message": f"✓ Папка {folder_name} обработана: {folder_results['files_processed']} файлов"
+                    })
+                    
+                except Exception as e:
+                    logger.error(f"Error processing folder {folder_name}: {str(e)}")
+                    results.append({
+                        "folder_name": folder_name,
+                        "folder_path": folder_path,
+                        "files_processed": 0,
+                        "design_created": False,
+                        "errors": [str(e)]
+                    })
+                    
+                    yield await send_progress_update({
+                        "type": "folder_error",
+                        "folder_name": folder_name,
+                        "error": str(e),
+                        "message": f"✗ Ошибка обработки папки {folder_name}: {str(e)}"
+                    })
+                    continue
             
-            except Exception as e:
-                logger.error(f"Error processing folder {folder_name}: {str(e)}")
-                results.append({
-                    "folder_name": folder_name,
-                    "folder_path": folder_path,
-                    "files_processed": 0,
-                    "design_created": False,
-                    "errors": [str(e)]
-                })
-                continue
+            # Рассчитываем стоимость
+            total_cost = (background_removal_count * COST_BACKGROUND_REMOVAL) + (p_image_edit_count * COST_P_IMAGE_EDIT)
+            
+            # Логируем итоговую стоимость
+            cost_logger.info(f"=== Итоговая стоимость обработки ===")
+            cost_logger.info(f"Background removal (удаление фона): {background_removal_count} изображений × ${COST_BACKGROUND_REMOVAL:.6f} = ${background_removal_count * COST_BACKGROUND_REMOVAL:.2f}")
+            cost_logger.info(f"prunaai/p-image-edit (дизайн): {p_image_edit_count} изображений × ${COST_P_IMAGE_EDIT:.2f} = ${p_image_edit_count * COST_P_IMAGE_EDIT:.2f}")
+            cost_logger.info(f"ОБЩАЯ СТОИМОСТЬ: ${total_cost:.2f}")
+            cost_logger.info(f"=== Конец обработки ===\n")
+            
+            # Отправляем финальный результат
+            yield await send_progress_update({
+                "type": "complete",
+                "success": True,
+                "folders_processed": len(results),
+                "total_background_removal": background_removal_count,
+                "total_design_created": p_image_edit_count,
+                "total_cost": round(total_cost, 2),
+                "cost_breakdown": {
+                    "background_removal": {
+                        "count": background_removal_count,
+                        "cost_per_image": COST_BACKGROUND_REMOVAL,
+                        "total": round(background_removal_count * COST_BACKGROUND_REMOVAL, 2)
+                    },
+                    "p_image_edit": {
+                        "count": p_image_edit_count,
+                        "cost_per_image": COST_P_IMAGE_EDIT,
+                        "total": round(p_image_edit_count * COST_P_IMAGE_EDIT, 2)
+                    }
+                },
+                "results": results,
+                "message": f"Обработка завершена! Обработано {len(results)} папок. Стоимость: ${round(total_cost, 2)}"
+            })
+        
+        return StreamingResponse(
+            generate_progress(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
+        )
         
         # Рассчитываем стоимость
         total_cost = (background_removal_count * COST_BACKGROUND_REMOVAL) + (p_image_edit_count * COST_P_IMAGE_EDIT)
