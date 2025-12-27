@@ -1371,10 +1371,14 @@ class App {
         resultsContent.innerHTML = '';
 
         try {
-            // Получаем API ключ
+            // Получаем API ключ (если есть в localStorage)
+            // Для replicate, fal, fal_object_removal ключ может быть в env variables на сервере
             const apiKey = this.modelManager.getApiKey(model);
-            if (!apiKey) {
-                throw new Error(`API ключ для модели ${model} не найден`);
+            
+            // Для replicate, fal, fal_object_removal не требуем ключ в localStorage
+            // Сервер возьмет его из env variables (Railway variables)
+            if (!apiKey && model !== 'replicate' && model !== 'fal' && model !== 'fal_object_removal') {
+                throw new Error(`API ключ для модели ${model} не найден. Установите его в панели API ключей.`);
             }
 
             // Получаем токен Yandex Disk
@@ -1387,6 +1391,7 @@ class App {
             formData.append('width', width);
             formData.append('height', height);
             formData.append('output_folder', outputFolder);
+            // Передаем ключ только если он есть (для replicate может быть в env на сервере)
             if (apiKey) {
                 formData.append('apiKey', apiKey);
             }

@@ -448,7 +448,13 @@ def get_api_key(model: str, api_key_from_request: Optional[str] = None) -> str:
         "fal_object_removal": os.getenv("FAL_KEY"),  # Использует тот же ключ что и FAL
     }
     
-    return env_keys.get(model) or ""
+    key = env_keys.get(model) or ""
+    
+    # Логируем для отладки (только если ключ не найден)
+    if not key and model == "replicate":
+        logging.debug(f"REPLICATE_API_KEY not found in environment variables")
+    
+    return key
 
 @app.get("/api/test/replicate-key")
 async def test_replicate_key():
@@ -1712,7 +1718,21 @@ async def batch_process_folders(
         # Получаем API ключ
         api_key = get_api_key(model, apiKey)
         if not api_key:
-            raise HTTPException(status_code=400, detail="API key not provided")
+            # Логируем для отладки
+            logger.error(f"API key not found for model: {model}")
+            logger.error(f"apiKey from request: {'provided' if apiKey else 'not provided'}")
+            if model == "replicate":
+                env_key_exists = bool(os.getenv('REPLICATE_API_KEY'))
+                logger.error(f"REPLICATE_API_KEY in env: {'exists' if env_key_exists else 'NOT FOUND - please set in Railway variables'}")
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"REPLICATE_API_KEY not found. Please set REPLICATE_API_KEY in Railway variables (Environment Variables section)."
+                )
+            else:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"API key not provided for model {model}. Please set it in Railway variables or provide it in the request."
+                )
         
         # Получаем список папок
         async with httpx.AsyncClient() as client:
