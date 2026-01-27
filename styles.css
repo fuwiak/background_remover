@@ -839,6 +839,20 @@ textarea.input {
     left: 0;
 }
 
+/* Правая боковая панель */
+.sidebar-right {
+    left: auto;
+    right: -400px;
+    border-right: none;
+    border-left: 2px solid var(--border-color);
+    transition: right 0.3s ease;
+}
+
+.sidebar-right.open {
+    right: 0;
+    left: auto;
+}
+
 .sidebar-header {
     padding: 20px;
     border-bottom: 2px solid var(--border-color);

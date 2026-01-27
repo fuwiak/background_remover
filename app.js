@@ -514,6 +514,20 @@ class App {
             this.refreshRecentFolders();
         });
 
+        // Кнопка открытия правой панели с обработанными папками
+        document.getElementById('openProcessedSidebarBtn').addEventListener('click', () => {
+            this.loadProcessedFolders();
+        });
+
+        // Закрытие правой панели
+        document.getElementById('closeProcessedSidebar').addEventListener('click', () => {
+            this.closeProcessedSidebar();
+        });
+
+        document.getElementById('processedSidebarOverlay').addEventListener('click', () => {
+            this.closeProcessedSidebar();
+        });
+
         // Инициализируем отображение последних папок
         this.renderRecentFolders();
     }
@@ -2298,23 +2312,42 @@ Do not crop or resize the image.`;
         refreshBtn.textContent = '⏳';
 
         try {
-            // Проверяем существование папок и обновляем информацию
-            for (let folder of this.recentFolders) {
-                try {
-                    const structure = await this.yandexDisk.getStructure(folder.path, true);
-                    // Обновляем информацию о папке если нужно
-                    folder.exists = true;
-                } catch (error) {
-                    folder.exists = false;
+            // Ищем все обработанные папки заново
+            const foundFolders = await this.findProcessedFoldersRecursive("/");
+            
+            // Обновляем список, объединяя найденные папки с сохраненными данными
+            const updatedFolders = [];
+            
+            for (const foundFolder of foundFolders) {
+                // Ищем сохраненную информацию о папке
+                const savedInfo = this.recentFolders.find(f => 
+                    f.path === foundFolder.path || 
+                    f.name === foundFolder.name
+                );
+                
+                if (savedInfo) {
+                    // Обновляем путь и сохраняем метаданные
+                    updatedFolders.push({
+                        ...savedInfo,
+                        path: foundFolder.path,
+                        name: foundFolder.name,
+                        exists: true
+                    });
+                } else {
+                    // Добавляем новую папку
+                    updatedFolders.push({
+                        ...foundFolder,
+                        exists: true
+                    });
                 }
             }
 
-            // Удаляем несуществующие папки
-            this.recentFolders = this.recentFolders.filter(f => f.exists !== false);
+            // Обновляем список
+            this.recentFolders = updatedFolders;
             this.saveRecentFolders();
             this.renderRecentFolders();
             
-            this.showMessage('Список обновлен', 'success');
+            this.showMessage(`Список обновлен. Найдено ${updatedFolders.length} папок`, 'success');
         } catch (error) {
             console.error('Error refreshing folders:', error);
             this.showError('Ошибка обновления списка: ' + error.message);
@@ -2328,6 +2361,167 @@ Do not crop or resize the image.`;
         try {
             const structure = await this.yandexDisk.getStructure(folderPath, true);
             this.renderSidebarStructure(structure.structure);
+            this.openSidebar();
+        } catch (error) {
+            this.showError('Ошибка открытия папки: ' + error.message);
+        }
+    }
+
+    // Управление правой панелью с обработанными папками
+    async loadProcessedFolders() {
+        const hasToken = await this.yandexDisk.checkAuth();
+        if (!hasToken) {
+            this.showError('Необходима авторизация в Яндекс Диске');
+            return;
+        }
+
+        const loadingEl = document.getElementById('processedSidebarLoading');
+        const foldersEl = document.getElementById('processedSidebarFolders');
+        
+        loadingEl.style.display = 'block';
+        loadingEl.textContent = 'Поиск обработанных папок...';
+        foldersEl.innerHTML = '';
+        this.openProcessedSidebar();
+
+        try {
+            // Рекурсивно ищем все папки с суффиксом "_Обработанный"
+            const processedFolders = await this.findProcessedFoldersRecursive("/");
+            
+            if (processedFolders.length === 0) {
+                foldersEl.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">Папки с суффиксом "_Обработанный" не найдены</div>';
+                loadingEl.style.display = 'none';
+                return;
+            }
+
+            // Сортируем по дате (новые сверху)
+            processedFolders.sort((a, b) => {
+                const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+                const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+                return timeB - timeA;
+            });
+
+            // Отображаем папки
+            this.renderProcessedFoldersInSidebar(processedFolders);
+            loadingEl.style.display = 'none';
+            
+        } catch (error) {
+            loadingEl.style.display = 'none';
+            foldersEl.innerHTML = `<div style="text-align: center; padding: 40px; color: var(--error-color);">Ошибка: ${error.message || 'Не удалось загрузить папки'}</div>`;
+            this.showError('Ошибка загрузки обработанных папок: ' + error.message);
+        }
+    }
+
+    async findProcessedFoldersRecursive(path, processedFolders = []) {
+        try {
+            // Загружаем структуру текущей папки
+            const structure = await this.yandexDisk.getStructure(path, true);
+            const items = structure.structure || [];
+
+            for (const item of items) {
+                if (item.type === 'dir') {
+                    const itemPath = item.path || (path === '/' ? `/${item.name}` : `${path}/${item.name}`);
+                    
+                    // Проверяем, содержит ли название "_Обработанный"
+                    if (item.name && item.name.includes('_Обработанный')) {
+                        // Ищем информацию о папке в сохраненных данных
+                        const savedInfo = this.recentFolders.find(f => 
+                            f.path === itemPath || 
+                            f.name === item.name ||
+                            itemPath.includes(f.path) ||
+                            f.path.includes(itemPath)
+                        );
+                        
+                        processedFolders.push({
+                            name: item.name,
+                            path: itemPath,
+                            files_processed: savedInfo?.files_processed || 0,
+                            design_created: savedInfo?.design_created || false,
+                            errors: savedInfo?.errors || [],
+                            timestamp: savedInfo?.timestamp || new Date().toISOString()
+                        });
+                    } else {
+                        // Рекурсивно проверяем подпапки (только если это не обработанная папка)
+                        // Ограничиваем глубину поиска для производительности
+                        if (itemPath.split('/').length < 5) {
+                            await this.findProcessedFoldersRecursive(itemPath, processedFolders);
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error(`Error searching in ${path}:`, error);
+            // Продолжаем поиск в других папках
+        }
+        
+        return processedFolders;
+    }
+
+    async renderProcessedFoldersInSidebar(folders) {
+        const foldersEl = document.getElementById('processedSidebarFolders');
+        foldersEl.innerHTML = '';
+
+        if (folders.length === 0) {
+            foldersEl.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">Папки не найдены</div>';
+            return;
+        }
+
+        for (const folder of folders) {
+            const folderDiv = document.createElement('div');
+            folderDiv.className = 'sidebar-file-item';
+            
+            const timestamp = new Date(folder.timestamp);
+            const timeStr = timestamp.toLocaleString('ru-RU', {
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+
+            folderDiv.innerHTML = `
+                <div class="sidebar-file-name">📁 ${this.escapeHtml(folder.name)}</div>
+                <div class="sidebar-file-path" style="margin-top: 8px;">
+                    <div style="margin-bottom: 4px;">📍 ${this.escapeHtml(folder.path)}</div>
+                    <div style="font-size: 11px; opacity: 0.7; margin-top: 4px;">
+                        📄 Файлов: ${folder.files_processed || 0}
+                        ${folder.design_created ? ' | 🎨 Дизайн создан' : ''}
+                        ${folder.errors && folder.errors.length > 0 ? ` | ⚠️ Ошибок: ${folder.errors.length}` : ''}
+                    </div>
+                    <div style="font-size: 10px; opacity: 0.6; margin-top: 4px;">🕒 ${timeStr}</div>
+                </div>
+                <div style="display: flex; gap: 8px; margin-top: 12px;">
+                    <a href="https://disk.yandex.ru/client/disk${folder.path}" target="_blank" class="btn btn-small" style="flex: 1; text-decoration: none; text-align: center;">
+                        Открыть →
+                    </a>
+                    <button class="btn btn-small" onclick="app.openProcessedFolder('${this.escapeHtml(folder.path)}')" style="flex: 1;">
+                        📂 Здесь
+                    </button>
+                </div>
+            `;
+
+            foldersEl.appendChild(folderDiv);
+        }
+    }
+
+    openProcessedSidebar() {
+        const sidebar = document.getElementById('processedSidebar');
+        const overlay = document.getElementById('processedSidebarOverlay');
+        sidebar.classList.add('open');
+        overlay.classList.add('active');
+    }
+
+    closeProcessedSidebar() {
+        const sidebar = document.getElementById('processedSidebar');
+        const overlay = document.getElementById('processedSidebarOverlay');
+        sidebar.classList.remove('open');
+        overlay.classList.remove('active');
+    }
+
+    async openProcessedFolder(folderPath) {
+        try {
+            const structure = await this.yandexDisk.getStructure(folderPath, true);
+            this.renderSidebarStructure(structure.structure);
+            this.closeProcessedSidebar();
             this.openSidebar();
         } catch (error) {
             this.showError('Ошибка открытия папки: ' + error.message);

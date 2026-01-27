@@ -31,6 +31,20 @@
     
     <div id="sidebarOverlay" class="sidebar-overlay"></div>
     
+    <!-- Правая боковая панель для обработанных папок -->
+    <div id="processedSidebar" class="sidebar sidebar-right">
+        <div class="sidebar-header">
+            <h3>📁 Обработанные папки</h3>
+            <button id="closeProcessedSidebar" class="btn-close">×</button>
+        </div>
+        <div class="sidebar-content">
+            <div id="processedSidebarLoading" class="sidebar-loading">Загрузка...</div>
+            <div id="processedSidebarFolders" class="sidebar-files"></div>
+        </div>
+    </div>
+    
+    <div id="processedSidebarOverlay" class="sidebar-overlay"></div>
+    
     <div class="crt-screen">
         <div class="container">
             <header class="header">
@@ -86,13 +100,17 @@
                 <!-- Панель последних обработанных папок -->
                 <div class="recent-panel">
                     <div class="panel-header-with-refresh">
-                        <h2 class="panel-title">📁 Последние обработанные папки</h2>
-                        <button id="refreshRecentBtn" class="btn btn-small" title="Обновить список">🔄</button>
+                        <h2 class="panel-title">📁 Обработанные папки</h2>
+                        <div style="display: flex; gap: 8px;">
+                            <button id="openProcessedSidebarBtn" class="btn btn-small" title="Открыть список обработанных папок">📂 Показать все</button>
+                            <button id="refreshRecentBtn" class="btn btn-small" title="Обновить список">🔄</button>
+                        </div>
                     </div>
                     <div id="recentFoldersContainer" class="recent-folders-container">
                         <div class="recent-empty-state">
                             <p>Здесь будут отображаться последние обработанные папки</p>
                             <p class="recent-hint">После завершения пакетной обработки папки появятся здесь автоматически</p>
+                            <p class="recent-hint">Нажмите "Показать все" для просмотра всех папок с суффиксом "_Обработанный"</p>
                         </div>
                     </div>
                 </div>
