@@ -1488,10 +1488,25 @@ async def upload_yandex_file(
     file_bytes = await file.read()
     
     async with httpx.AsyncClient() as client:
+        # Проверяем, существует ли файл уже
+        try:
+            check_response = await client.get(
+                "https://cloud-api.yandex.net/v1/disk/resources",
+                params={"path": path},
+                headers={"Authorization": f"OAuth {token}"},
+                timeout=30.0
+            )
+            if check_response.status_code == 200:
+                raise HTTPException(status_code=409, detail="File already exists")
+        except HTTPException:
+            raise
+        except:
+            pass  # Если проверка не удалась, продолжаем загрузку
+        
         # Получаем ссылку для загрузки
         link_response = await client.get(
             "https://cloud-api.yandex.net/v1/disk/resources/upload",
-            params={"path": path, "overwrite": "true"},
+            params={"path": path, "overwrite": "false"},
             headers={"Authorization": f"OAuth {token}"},
             timeout=30.0
         )
@@ -2251,34 +2266,68 @@ async def batch_process_folders(
                         design_name = f"{file_name.rsplit('.', 1)[0]}_design.png"
                         design_save_path = f"{output_path}/{design_name}"
                         
-                        async with httpx.AsyncClient() as design_client:
-                            upload_link_response = await design_client.get(
-                                "https://cloud-api.yandex.net/v1/disk/resources/upload",
-                                params={"path": design_save_path, "overwrite": "true"},
-                                headers={"Authorization": f"OAuth {token}"},
-                                timeout=30.0
-                            )
-                            
-                            if upload_link_response.status_code == 200:
-                                upload_url = upload_link_response.json()["href"]
-                                upload_response = await design_client.put(
-                                    upload_url,
-                                    content=design_bytes,
-                                    headers={"Content-Type": "image/png"},
-                                    timeout=60.0
+                        # Проверяем, существует ли дизайн уже
+                        design_already_exists = False
+                        try:
+                            async with httpx.AsyncClient() as check_design_client:
+                                if use_public_api:
+                                    check_design_response = await check_design_client.get(
+                                        "https://cloud-api.yandex.net/v1/disk/public/resources",
+                                        params={"public_key": public_key, "path": design_save_path},
+                                        headers={"Authorization": f"OAuth {token}"},
+                                        timeout=30.0
+                                    )
+                                else:
+                                    check_design_response = await check_design_client.get(
+                                        "https://cloud-api.yandex.net/v1/disk/resources",
+                                        params={"path": design_save_path},
+                                        headers={"Authorization": f"OAuth {token}"},
+                                        timeout=30.0
+                                    )
+                                
+                                if check_design_response.status_code == 200:
+                                    design_already_exists = True
+                        except:
+                            pass  # Если проверка не удалась, продолжаем создание
+                        
+                        if design_already_exists:
+                            logger.info(f"    ⏭ Дизайн уже существует, пропущен: {design_name}")
+                            yield await send_progress_update({
+                                "type": "design_complete",
+                                "folder_name": folder_name,
+                                "file_name": file_name,
+                                "design_name": design_name,
+                                "message": f"⏭ Дизайн уже существует, пропущен: {design_name}"
+                            })
+                        else:
+                            async with httpx.AsyncClient() as design_client:
+                                upload_link_response = await design_client.get(
+                                    "https://cloud-api.yandex.net/v1/disk/resources/upload",
+                                    params={"path": design_save_path, "overwrite": "false"},
+                                    headers={"Authorization": f"OAuth {token}"},
+                                    timeout=30.0
                                 )
                                 
-                                if upload_response.status_code in [201, 202]:
-                                    results["design_created"] = True
-                                    logger.info(f"    Saved design: {design_name}")
+                                if upload_link_response.status_code == 200:
+                                    upload_url = upload_link_response.json()["href"]
+                                    upload_response = await design_client.put(
+                                        upload_url,
+                                        content=design_bytes,
+                                        headers={"Content-Type": "image/png"},
+                                        timeout=60.0
+                                    )
                                     
-                                    yield await send_progress_update({
-                                        "type": "design_complete",
-                                        "folder_name": folder_name,
-                                        "file_name": file_name,
-                                        "design_name": design_name,
-                                        "message": f"✓ Дизайн создан и сохранен: {design_name}"
-                                    })
+                                    if upload_response.status_code in [201, 202]:
+                                        results["design_created"] = True
+                                        logger.info(f"    Saved design: {design_name}")
+                                        
+                                        yield await send_progress_update({
+                                            "type": "design_complete",
+                                            "folder_name": folder_name,
+                                            "file_name": file_name,
+                                            "design_name": design_name,
+                                            "message": f"✓ Дизайн создан и сохранен: {design_name}"
+                                        })
                 except Exception as e:
                     logger.warning(f"    Failed to create design for {file_name}: {str(e)}")
                     results["errors"].append(f"Design creation failed: {str(e)}")
@@ -2396,40 +2445,40 @@ async def batch_process_folders(
                                     
                                     # Проверяем, что обработанный файл существует
                                     if processed_file_name in existing_files:
-                                        # Скачиваем обработанный файл для создания дизайна
-                                        try:
-                                            async with httpx.AsyncClient() as download_client:
-                                                if use_public_api:
-                                                    processed_file_path = f"{output_path}/{processed_file_name}"
-                                                    link_response = await download_client.get(
-                                                        "https://cloud-api.yandex.net/v1/disk/public/resources/download",
-                                                        params={"public_key": public_key, "path": processed_file_path},
-                                                        headers={"Authorization": f"OAuth {token}"},
-                                                        timeout=30.0
-                                                    )
-                                                else:
-                                                    link_response = await download_client.get(
-                                                        "https://cloud-api.yandex.net/v1/disk/resources/download",
-                                                        params={"path": f"{output_path}/{processed_file_name}"},
-                                                        headers={"Authorization": f"OAuth {token}"},
-                                                        timeout=30.0
-                                                    )
-                                                
-                                                if link_response.status_code == 200:
-                                                    download_url = link_response.json()["href"]
-                                                    file_response = await download_client.get(download_url, timeout=60.0, follow_redirects=True)
-                                                    
-                                                    if file_response.status_code == 200:
-                                                        processed_bytes = file_response.content
+                                                # Скачиваем обработанный файл для создания дизайна
+                                                try:
+                                                    async with httpx.AsyncClient() as download_client:
+                                                        if use_public_api:
+                                                            processed_file_path = f"{output_path}/{processed_file_name}"
+                                                            link_response = await download_client.get(
+                                                                "https://cloud-api.yandex.net/v1/disk/public/resources/download",
+                                                                params={"public_key": public_key, "path": processed_file_path},
+                                                                headers={"Authorization": f"OAuth {token}"},
+                                                                timeout=30.0
+                                                            )
+                                                        else:
+                                                            link_response = await download_client.get(
+                                                                "https://cloud-api.yandex.net/v1/disk/resources/download",
+                                                                params={"path": f"{output_path}/{processed_file_name}"},
+                                                                headers={"Authorization": f"OAuth {token}"},
+                                                                timeout=30.0
+                                                            )
                                                         
-                                                        # Создаем дизайн
-                                                        async for update in create_design_generator(
-                                                            processed_bytes, first_file_name, current_name, output_path,
-                                                            token, use_public_api, public_key, api_key, design_count, results
-                                                        ):
-                                                            yield update
-                                        except Exception as e:
-                                            logger.warning(f"    Не удалось создать дизайн для {current_name}: {str(e)}")
+                                                        if link_response.status_code == 200:
+                                                            download_url = link_response.json()["href"]
+                                                            file_response = await download_client.get(download_url, timeout=60.0, follow_redirects=True)
+                                                            
+                                                            if file_response.status_code == 200:
+                                                                processed_bytes = file_response.content
+                                                                
+                                                                # Создаем дизайн
+                                                                async for update in create_design_generator(
+                                                                    processed_bytes, first_file_name, current_name, output_path,
+                                                                    token, use_public_api, public_key, api_key, design_count, results
+                                                                ):
+                                                                    yield update
+                                                except Exception as e:
+                                                    logger.warning(f"    Не удалось создать дизайн для {current_name}: {str(e)}")
                                 # Продолжаем обработку подпапок
                             else:
                                 # Создаем папку для результатов только если есть файлы для обработки
@@ -2544,6 +2593,18 @@ async def batch_process_folders(
                                         save_name = f"{file_name.rsplit('.', 1)[0]}_processed.png"
                                         save_path = f"{output_path}/{save_name}"
                                         
+                                        # Проверяем, существует ли файл уже
+                                        if save_name in existing_files:
+                                            logger.info(f"    ⏭ Пропущен (уже существует): {save_name}")
+                                            yield await send_progress_update({
+                                                "type": "file_complete",
+                                                "folder_name": current_name,
+                                                "file_name": file_name,
+                                                "saved_name": save_name,
+                                                "message": f"⏭ Файл уже существует, пропущен: {save_name}"
+                                            })
+                                            continue
+                                        
                                         yield await send_progress_update({
                                             "type": "saving",
                                             "folder_name": current_name,
@@ -2557,7 +2618,7 @@ async def batch_process_folders(
                                             async with httpx.AsyncClient() as upload_client:
                                                 upload_link_response = await upload_client.get(
                                                     "https://cloud-api.yandex.net/v1/disk/resources/upload",
-                                                    params={"path": save_path, "overwrite": "true"},
+                                                    params={"path": save_path, "overwrite": "false"},
                                                     headers={"Authorization": f"OAuth {token}"},
                                                     timeout=30.0
                                                 )
@@ -2582,6 +2643,7 @@ async def batch_process_folders(
                                             
                                             results["files_processed"] += 1
                                             logger.info(f"    ✓ Saved: {save_name} to {save_path}")
+                                            existing_files.add(save_name)  # Добавляем в список существующих
                                             
                                             yield await send_progress_update({
                                                 "type": "file_complete",
@@ -2986,6 +3048,18 @@ async def batch_process_folders(
                         save_name = f"{file_name.rsplit('.', 1)[0]}_processed.png"
                         save_path = f"{main_output_path}/{save_name}"
                         
+                        # Проверяем, существует ли файл уже
+                        if save_name in existing_files:
+                            logger.info(f"    ⏭ Пропущен (уже существует): {save_name}")
+                            yield await send_progress_update({
+                                "type": "file_complete",
+                                "folder_name": folder_name,
+                                "file_name": file_name,
+                                "saved_name": save_name,
+                                "message": f"⏭ Файл уже существует, пропущен: {save_name}"
+                            })
+                            continue
+                        
                         yield await send_progress_update({
                             "type": "saving",
                             "folder_name": folder_name,
@@ -2999,7 +3073,7 @@ async def batch_process_folders(
                             async with httpx.AsyncClient() as client:
                                 upload_link_response = await client.get(
                                     "https://cloud-api.yandex.net/v1/disk/resources/upload",
-                                    params={"path": save_path, "overwrite": "true"},
+                                    params={"path": save_path, "overwrite": "false"},
                                     headers={"Authorization": f"OAuth {token}"},
                                     timeout=30.0
                                 )
@@ -3024,6 +3098,7 @@ async def batch_process_folders(
                             
                             results["files_processed"] += 1
                             logger.info(f"    ✓ Saved: {save_name} to {save_path}")
+                            existing_files.add(save_name)  # Добавляем в список существующих
                             
                             yield await send_progress_update({
                                 "type": "file_complete",
@@ -3117,9 +3192,9 @@ async def batch_process_folders(
                                     link_response = await download_client.get(
                                         "https://cloud-api.yandex.net/v1/disk/public/resources/download",
                                         params={"public_key": public_key, "path": processed_file_path},
-                                                headers={"Authorization": f"OAuth {token}"},
-                                                timeout=30.0
-                                            )
+                                        headers={"Authorization": f"OAuth {token}"},
+                                        timeout=30.0
+                                    )
                                 else:
                                     link_response = await download_client.get(
                                         "https://cloud-api.yandex.net/v1/disk/resources/download",
