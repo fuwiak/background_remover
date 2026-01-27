@@ -2610,24 +2610,97 @@ async def batch_process_folders(
                                             "saved_name": save_name,
                                             "message": f"✓ Файл обработан и сохранен: {save_name}"
                                         })
-                                
-                                # Для первой фотографии создаем версию с дизайном (размещение на фоне)
-                                        # Создаем дизайн, если его еще нет в папке
-                                        if file_idx == 0 and not design_exists:
-                                            design_created = False
-                                            async for update in create_design_generator(
-                                                processed_bytes, file_name, current_name, output_path,
-                                                token, use_public_api, public_key, api_key, design_count, results
-                                            ):
-                                                yield update
-                                                # После создания дизайна помечаем, что он существует
-                                                if update.get("type") == "design_complete":
-                                                    design_exists = True
-                                                    design_created = True
                                     except Exception as e:
                                         logger.error(f"    Error processing {file_info.get('name', 'unknown')}: {str(e)}")
                                         results["errors"].append(f"{file_info.get('name', 'unknown')}: {str(e)}")
                                         continue
+                                
+                                # После обработки всех файлов проверяем наличие дизайна и создаем его, если нужно
+                                # Повторно проверяем наличие дизайна в папке "Обработанный"
+                                design_exists = False
+                                first_processed_file_name = None
+                                try:
+                                    async with httpx.AsyncClient() as check_client:
+                                        if use_public_api:
+                                            check_response = await check_client.get(
+                                                "https://cloud-api.yandex.net/v1/disk/public/resources",
+                                                params={"public_key": public_key, "path": output_path, "limit": 1000},
+                                                headers={"Authorization": f"OAuth {token}"},
+                                                timeout=30.0
+                                            )
+                                        else:
+                                            check_response = await check_client.get(
+                                                "https://cloud-api.yandex.net/v1/disk/resources",
+                                                params={"path": output_path, "limit": 1000},
+                                                headers={"Authorization": f"OAuth {token}"},
+                                                timeout=30.0
+                                            )
+                                        
+                                        if check_response.status_code == 200:
+                                            check_data = check_response.json()
+                                            check_items = check_data.get("_embedded", {}).get("items", [])
+                                            if not check_items and use_public_api:
+                                                check_items = check_data.get("items", [])
+                                            
+                                            for item in check_items:
+                                                if item.get("type") == "file":
+                                                    file_name_check = item.get("name", "")
+                                                    # Проверяем наличие дизайна
+                                                    if file_name_check.endswith("_design.png"):
+                                                        design_exists = True
+                                                    # Сохраняем имя первого обработанного файла (не дизайна)
+                                                    elif file_name_check.endswith("_processed.png") and first_processed_file_name is None:
+                                                        first_processed_file_name = file_name_check
+                                except Exception as e:
+                                    logger.warning(f"    Не удалось проверить наличие дизайна в {output_path}: {str(e)}")
+                                
+                                # Если дизайна нет, создаем его из первого обработанного файла
+                                if not design_exists and first_processed_file_name:
+                                    try:
+                                        # Находим исходное имя файла (без _processed.png)
+                                        original_file_name = first_processed_file_name.replace("_processed.png", "")
+                                        # Ищем исходный файл в списке обработанных файлов
+                                        source_file_name = None
+                                        for file_info in current_files:
+                                            if file_info.get("name", "").rsplit('.', 1)[0] == original_file_name.rsplit('.', 1)[0]:
+                                                source_file_name = file_info.get("name", "")
+                                                break
+                                        
+                                        if source_file_name:
+                                            # Скачиваем обработанный файл для создания дизайна
+                                            async with httpx.AsyncClient() as download_client:
+                                                if use_public_api:
+                                                    processed_file_path = f"{output_path}/{first_processed_file_name}"
+                                                    link_response = await download_client.get(
+                                                        "https://cloud-api.yandex.net/v1/disk/public/resources/download",
+                                                        params={"public_key": public_key, "path": processed_file_path},
+                                                        headers={"Authorization": f"OAuth {token}"},
+                                                        timeout=30.0
+                                                    )
+                                                else:
+                                                    link_response = await download_client.get(
+                                                        "https://cloud-api.yandex.net/v1/disk/resources/download",
+                                                        params={"path": f"{output_path}/{first_processed_file_name}"},
+                                                        headers={"Authorization": f"OAuth {token}"},
+                                                        timeout=30.0
+                                                    )
+                                                
+                                                if link_response.status_code == 200:
+                                                    download_url = link_response.json()["href"]
+                                                    file_response = await download_client.get(download_url, timeout=60.0, follow_redirects=True)
+                                                    
+                                                    if file_response.status_code == 200:
+                                                        processed_bytes = file_response.content
+                                                        
+                                                        # Создаем дизайн
+                                            async for update in create_design_generator(
+                                                            processed_bytes, source_file_name, current_name, output_path,
+                                                token, use_public_api, public_key, api_key, design_count, results
+                                            ):
+                                                yield update
+                                    except Exception as e:
+                                        logger.warning(f"    Не удалось создать дизайн для {current_name}: {str(e)}")
+                                        results["errors"].append(f"Design creation failed for {current_name}: {str(e)}")
                         
                         # Рекурсивно обрабатываем все подпапки
                         for subfolder in current_subfolders:
@@ -2704,9 +2777,94 @@ async def batch_process_folders(
                     if save_name not in existing_files:
                         files_to_process.append(file_info)
                 
-                # Если нет файлов для обработки, пропускаем
+                # Если нет файлов для обработки, проверяем наличие дизайна
                 if not files_to_process:
-                    logger.info(f"  Все файлы в главной папке '{folder_name}' уже обработаны, пропускаем")
+                    logger.info(f"  Все файлы в главной папке '{folder_name}' уже обработаны, проверяем наличие дизайна")
+                    # Проверяем наличие дизайна
+                    design_exists = False
+                    first_processed_file_name = None
+                    try:
+                        async with httpx.AsyncClient() as check_client:
+                            if use_public_api:
+                                check_response = await check_client.get(
+                                    "https://cloud-api.yandex.net/v1/disk/public/resources",
+                                    params={"public_key": public_key, "path": main_output_path, "limit": 1000},
+                                    headers={"Authorization": f"OAuth {token}"},
+                                    timeout=30.0
+                                )
+                            else:
+                                check_response = await check_client.get(
+                                    "https://cloud-api.yandex.net/v1/disk/resources",
+                                    params={"path": main_output_path, "limit": 1000},
+                                    headers={"Authorization": f"OAuth {token}"},
+                                    timeout=30.0
+                                )
+                            
+                            if check_response.status_code == 200:
+                                check_data = check_response.json()
+                                check_items = check_data.get("_embedded", {}).get("items", [])
+                                if not check_items and use_public_api:
+                                    check_items = check_data.get("items", [])
+                                
+                                for item in check_items:
+                                    if item.get("type") == "file":
+                                        file_name_check = item.get("name", "")
+                                        # Проверяем наличие дизайна
+                                        if file_name_check.endswith("_design.png"):
+                                            design_exists = True
+                                        # Сохраняем имя первого обработанного файла (не дизайна)
+                                        elif file_name_check.endswith("_processed.png") and first_processed_file_name is None:
+                                            first_processed_file_name = file_name_check
+                    except Exception as e:
+                        logger.warning(f"    Не удалось проверить наличие дизайна в {main_output_path}: {str(e)}")
+                    
+                    # Если дизайна нет, создаем его из первого обработанного файла
+                    if not design_exists and first_processed_file_name:
+                        try:
+                            # Находим исходное имя файла (без _processed.png)
+                            original_file_name = first_processed_file_name.replace("_processed.png", "")
+                            # Ищем исходный файл в списке файлов
+                            source_file_name = None
+                            for file_info in files:
+                                if file_info.get("name", "").rsplit('.', 1)[0] == original_file_name.rsplit('.', 1)[0]:
+                                    source_file_name = file_info.get("name", "")
+                                    break
+                            
+                            if source_file_name:
+                                # Скачиваем обработанный файл для создания дизайна
+                                async with httpx.AsyncClient() as download_client:
+                                    if use_public_api:
+                                        processed_file_path = f"{main_output_path}/{first_processed_file_name}"
+                                        link_response = await download_client.get(
+                                            "https://cloud-api.yandex.net/v1/disk/public/resources/download",
+                                            params={"public_key": public_key, "path": processed_file_path},
+                                            headers={"Authorization": f"OAuth {token}"},
+                                            timeout=30.0
+                                        )
+                                    else:
+                                        link_response = await download_client.get(
+                                            "https://cloud-api.yandex.net/v1/disk/resources/download",
+                                            params={"path": f"{main_output_path}/{first_processed_file_name}"},
+                                            headers={"Authorization": f"OAuth {token}"},
+                                            timeout=30.0
+                                        )
+                                    
+                                    if link_response.status_code == 200:
+                                        download_url = link_response.json()["href"]
+                                        file_response = await download_client.get(download_url, timeout=60.0, follow_redirects=True)
+                                        
+                                        if file_response.status_code == 200:
+                                            processed_bytes = file_response.content
+                                            
+                                            # Создаем дизайн
+                                            async for update in create_design_generator(
+                                                processed_bytes, source_file_name, folder_name, main_output_path,
+                                                token, use_public_api, public_key, api_key, design_count, results
+                                            ):
+                                                yield update
+                        except Exception as e:
+                            logger.warning(f"    Не удалось создать дизайн для главной папки {folder_name}: {str(e)}")
+                            results["errors"].append(f"Design creation failed for {folder_name}: {str(e)}")
                 else:
                     # Создаем папку для результатов только если есть файлы для обработки
                     async with httpx.AsyncClient() as create_client:
@@ -2896,123 +3054,96 @@ async def batch_process_folders(
                             "message": f"✓ Файл обработан и сохранен: {save_name}"
                         })
                         
-                        # Для первой фотографии создаем версию с дизайном (размещение на фоне)
-                        # Создаем дизайн только один раз для первого файла
-                        if file_idx == 0 and not design_created_flag[0]:
-                            try:
-                                # Получаем путь к фону
-                                background_paths = [
-                                    "/app/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg",
-                                    os.path.expanduser("~/background_remover/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg"),
-                                    "./background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg",
-                                    "background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg"
-                                ]
-                                
-                                background_path = None
-                                for path in background_paths:
-                                    if os.path.exists(path):
-                                        background_path = path
-                                        break
-                                
-                                if background_path:
-                                    with open(background_path, 'rb') as f:
-                                        background_bytes = f.read()
-                                    
-                                    processed_file_obj = io.BytesIO(processed_bytes)
-                                    processed_file_obj.name = "processed.png"
-                                    background_file_obj = io.BytesIO(background_bytes)
-                                    background_file_obj.name = "background.jpeg"
-                                    
-                                    os.environ["REPLICATE_API_TOKEN"] = api_key
-                                    
-                                    default_prompt = """Add the product from @img2 to the image @img1. The product must levitate directly above the podium, barely touching the podium surface, with a visible contact shadow."""
-                                    
-                                    processed_file_obj.seek(0)
-                                    background_file_obj.seek(0)
-                                    
-                                    model_input = {
-                                        "images": [background_file_obj, processed_file_obj],
-                                        "prompt": default_prompt,
-                                        "aspect_ratio": "4:3"
-                                    }
-                                    
-                                    yield await send_progress_update({
-                                        "type": "design_start",
-                                        "folder_name": folder_name,
-                                        "file_name": file_name,
-                                        "message": f"Создание дизайна для: {file_name}"
-                                    })
-                                    
-                                    design_output = await asyncio.to_thread(
-                                        replicate.run,
-                                        "prunaai/p-image-edit",
-                                        input=model_input
-                                    )
-                                    
-                                    design_count[0] += 1
-                                    p_image_edit_count = design_count[0]
-                                    
-                                    design_bytes = None
-                                    if hasattr(design_output, 'read'):
-                                        design_bytes = design_output.read()
-                                    elif isinstance(design_output, str):
-                                        async with httpx.AsyncClient() as http_client:
-                                            response = await http_client.get(design_output, timeout=60.0)
-                                            if response.status_code == 200:
-                                                design_bytes = response.content
-                                    elif isinstance(design_output, list) and len(design_output) > 0:
-                                        first_item = design_output[0]
-                                        if hasattr(first_item, 'read'):
-                                            design_bytes = first_item.read()
-                                        elif isinstance(first_item, str):
-                                            async with httpx.AsyncClient() as http_client:
-                                                response = await http_client.get(first_item, timeout=60.0)
-                                                if response.status_code == 200:
-                                                    design_bytes = response.content
-                                    
-                                    if design_bytes:
-                                        # Сохраняем дизайн на Yandex Disk в ту же папку
-                                        design_name = f"{file_name.rsplit('.', 1)[0]}_design.png"
-                                        design_save_path = f"{main_output_path}/{design_name}"
-                                        
-                                        async with httpx.AsyncClient() as client:
-                                            upload_link_response = await client.get(
-                                                "https://cloud-api.yandex.net/v1/disk/resources/upload",
-                                                params={"path": design_save_path, "overwrite": "true"},
-                                                headers={"Authorization": f"OAuth {token}"},
-                                                timeout=30.0
-                                            )
-                                            
-                                            if upload_link_response.status_code == 200:
-                                                upload_url = upload_link_response.json()["href"]
-                                                upload_response = await client.put(
-                                                    upload_url,
-                                                    content=design_bytes,
-                                                    headers={"Content-Type": "image/png"},
-                                                    timeout=60.0
-                                                )
-                                                
-                                                if upload_response.status_code in [201, 202]:
-                                                    results["design_created"] = True
-                                                    design_created_flag[0] = True  # Помечаем, что дизайн уже создан
-                                                    logger.info(f"    Saved design: {design_name}")
-                                                    
-                                                    yield await send_progress_update({
-                                                        "type": "design_complete",
-                                                        "folder_name": folder_name,
-                                                        "file_name": file_name,
-                                                        "design_name": design_name,
-                                                        "message": f"✓ Дизайн создан и сохранен: {design_name}"
-                                                    })
-                            
-                            except Exception as e:
-                                logger.warning(f"    Failed to create design for {file_name}: {str(e)}")
-                                results["errors"].append(f"Design creation failed: {str(e)}")
-                    
                     except Exception as e:
                         logger.error(f"    Error processing {file_info.get('name', 'unknown')}: {str(e)}")
                         results["errors"].append(f"{file_info.get('name', 'unknown')}: {str(e)}")
                         continue
+                
+                # После обработки всех файлов проверяем наличие дизайна и создаем его, если нужно
+                design_exists = False
+                first_processed_file_name = None
+                try:
+                    async with httpx.AsyncClient() as check_client:
+                        if use_public_api:
+                            check_response = await check_client.get(
+                                "https://cloud-api.yandex.net/v1/disk/public/resources",
+                                params={"public_key": public_key, "path": main_output_path, "limit": 1000},
+                                headers={"Authorization": f"OAuth {token}"},
+                                timeout=30.0
+                            )
+                        else:
+                            check_response = await check_client.get(
+                                "https://cloud-api.yandex.net/v1/disk/resources",
+                                params={"path": main_output_path, "limit": 1000},
+                                headers={"Authorization": f"OAuth {token}"},
+                                timeout=30.0
+                            )
+                        
+                        if check_response.status_code == 200:
+                            check_data = check_response.json()
+                            check_items = check_data.get("_embedded", {}).get("items", [])
+                            if not check_items and use_public_api:
+                                check_items = check_data.get("items", [])
+                            
+                            for item in check_items:
+                                if item.get("type") == "file":
+                                    file_name_check = item.get("name", "")
+                                    # Проверяем наличие дизайна
+                                    if file_name_check.endswith("_design.png"):
+                                        design_exists = True
+                                    # Сохраняем имя первого обработанного файла (не дизайна)
+                                    elif file_name_check.endswith("_processed.png") and first_processed_file_name is None:
+                                        first_processed_file_name = file_name_check
+                except Exception as e:
+                    logger.warning(f"    Не удалось проверить наличие дизайна в {main_output_path}: {str(e)}")
+                
+                # Если дизайна нет, создаем его из первого обработанного файла
+                if not design_exists and first_processed_file_name:
+                    try:
+                        # Находим исходное имя файла (без _processed.png)
+                        original_file_name = first_processed_file_name.replace("_processed.png", "")
+                        # Ищем исходный файл в списке файлов
+                        source_file_name = None
+                        for file_info in files:
+                            if file_info.get("name", "").rsplit('.', 1)[0] == original_file_name.rsplit('.', 1)[0]:
+                                source_file_name = file_info.get("name", "")
+                                break
+                        
+                        if source_file_name:
+                            # Скачиваем обработанный файл для создания дизайна
+                            async with httpx.AsyncClient() as download_client:
+                                if use_public_api:
+                                    processed_file_path = f"{main_output_path}/{first_processed_file_name}"
+                                    link_response = await download_client.get(
+                                        "https://cloud-api.yandex.net/v1/disk/public/resources/download",
+                                        params={"public_key": public_key, "path": processed_file_path},
+                                                headers={"Authorization": f"OAuth {token}"},
+                                                timeout=30.0
+                                            )
+                                else:
+                                    link_response = await download_client.get(
+                                        "https://cloud-api.yandex.net/v1/disk/resources/download",
+                                        params={"path": f"{main_output_path}/{first_processed_file_name}"},
+                                        headers={"Authorization": f"OAuth {token}"},
+                                        timeout=30.0
+                                    )
+                                
+                                if link_response.status_code == 200:
+                                    download_url = link_response.json()["href"]
+                                    file_response = await download_client.get(download_url, timeout=60.0, follow_redirects=True)
+                                    
+                                    if file_response.status_code == 200:
+                                        processed_bytes = file_response.content
+                                        
+                                        # Создаем дизайн
+                                        async for update in create_design_generator(
+                                            processed_bytes, source_file_name, folder_name, main_output_path,
+                                            token, use_public_api, public_key, api_key, design_count, results
+                                        ):
+                                            yield update
+                    except Exception as e:
+                        logger.warning(f"    Не удалось создать дизайн для главной папки {folder_name}: {str(e)}")
+                        results["errors"].append(f"Design creation failed for {folder_name}: {str(e)}")
             
             # Обновляем счетчики перед расчетом стоимости
             background_removal_count = bg_count[0]
