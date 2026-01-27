@@ -1726,18 +1726,17 @@ class App {
                     html += `<p style="margin: 0 0 8px 0; color: #ff6b6b; font-size: 12px;">⚠ Ошибки: ${folder.errors.join(', ')}</p>`;
                 }
                 
-                // Определяем путь к обработанной папке
+                // Определяем путь к обработанной папке (внутри исходной папки)
                 const folderPath = folder.folder_path || '';
-                const parentPath = folderPath.split('/').slice(0, -1).join('/') || '/';
-                const outputFolderName = `${folderName}_Обработанный`;
-                const processedPath = parentPath === '/' ? `/${outputFolderName}` : `${parentPath}/${outputFolderName}`;
+                const processedPath = folderPath ? `${folderPath}/Обработанный` : `/${folderName}/Обработанный`;
+                const outputFolderName = 'Обработанный';
                 
                 html += `<p style="margin: 0; color: var(--text-color); font-size: 11px; opacity: 0.7;">Файлы сохранены в: ${processedPath}</p>`;
                 html += `</div>`;
 
                 // Сохраняем информацию о папке для добавления в список последних
                 processedFolders.push({
-                    name: outputFolderName,
+                    name: `${folderName}/Обработанный`,
                     path: processedPath,
                     files_processed: folder.files_processed || 0,
                     design_created: folder.design_created || false,
@@ -1750,7 +1749,7 @@ class App {
                     <div style="display: flex; align-items: center; gap: 12px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 6px;">
                         <span style="font-size: 18px;">📁</span>
                         <div style="flex: 1;">
-                            <div style="font-weight: 600; color: var(--text-color); font-size: 14px;">${outputFolderName}</div>
+                            <div style="font-weight: 600; color: var(--text-color); font-size: 14px;">${folderName}/Обработанный</div>
                             <div style="font-size: 11px; color: var(--text-secondary);">${processedPath}</div>
                         </div>
                         <a href="${yandexUrl}" target="_blank" class="btn btn-small" style="text-decoration: none; white-space: nowrap;">
@@ -2421,19 +2420,29 @@ Do not crop or resize the image.`;
                 if (item.type === 'dir') {
                     const itemPath = item.path || (path === '/' ? `/${item.name}` : `${path}/${item.name}`);
                     
-                    // Проверяем, содержит ли название "_Обработанный"
-                    if (item.name && item.name.includes('_Обработанный')) {
+                    // Проверяем, является ли это папкой "Обработанный"
+                    // Также проверяем старый формат "_Обработанный" для обратной совместимости
+                    const isProcessedFolder = item.name === 'Обработанный' || 
+                                             (item.name && item.name.includes('_Обработанный'));
+                    
+                    if (isProcessedFolder) {
+                        // Определяем родительскую папку для отображения
+                        const parentPath = itemPath.split('/').slice(0, -1).join('/') || '/';
+                        const parentName = parentPath.split('/').pop() || 'Корень';
+                        
                         // Ищем информацию о папке в сохраненных данных
                         const savedInfo = this.recentFolders.find(f => 
                             f.path === itemPath || 
-                            f.name === item.name ||
+                            f.path === parentPath ||
                             itemPath.includes(f.path) ||
                             f.path.includes(itemPath)
                         );
                         
                         processedFolders.push({
-                            name: item.name,
+                            name: `${parentName}/Обработанный`,
                             path: itemPath,
+                            parentPath: parentPath,
+                            parentName: parentName,
                             files_processed: savedInfo?.files_processed || 0,
                             design_created: savedInfo?.design_created || false,
                             errors: savedInfo?.errors || [],
@@ -2442,7 +2451,7 @@ Do not crop or resize the image.`;
                     } else {
                         // Рекурсивно проверяем подпапки (только если это не обработанная папка)
                         // Ограничиваем глубину поиска для производительности
-                        if (itemPath.split('/').length < 5) {
+                        if (itemPath.split('/').length < 6) {
                             await this.findProcessedFoldersRecursive(itemPath, processedFolders);
                         }
                     }

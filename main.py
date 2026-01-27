@@ -1829,7 +1829,8 @@ async def batch_process_folders(
     Batch processing файлов из выбранной папки на Yandex Disk.
     Обрабатывает все фотографии в выбранной папке.
     Все фотографии переносятся на белый фон с заданным размером.
-    Результаты сохраняются в папку [название_папки]_Обработанный.
+    Результаты сохраняются в папку [название_папки]/Обработанный (внутри исходной папки).
+    Для подпапок результаты сохраняются в [название_подпапки]/Обработанный.
     Для первой фотографии создается версия с дизайном (размещение на фоне).
     Все результаты сохраняются на Yandex Disk.
     """
@@ -2023,18 +2024,16 @@ async def batch_process_folders(
         cost_logger.info(f"=== Начало обработки папки '{folder_name}' ===")
         cost_logger.info(f"Найдено подпапок: {len(subfolders)}, файлов в папке: {len(files)}, Размер выходных изображений: {width}x{height}")
         
-        # Создаем папку для результатов
-        # Используем имя папки + "_Обработанный"
-        output_folder_name = f"{folder_name}_Обработанный"
+        # Создаем папку для результатов внутри исходной папки
+        # Используем "Обработанный" вместо "[название]_Обработанный"
+        output_folder_name = "Обработанный"
         
-        # Создаем папку рядом с исходной папкой
+        # Создаем папку внутри исходной папки
         if folder_path.startswith('/'):
-            # Извлекаем родительскую папку
-            parent_path = '/'.join(folder_path.rstrip('/').split('/')[:-1]) if '/' in folder_path else '/'
-            main_output_path = f"{parent_path}/{output_folder_name}" if parent_path != '/' else f"/{output_folder_name}"
+            main_output_path = f"{folder_path}/{output_folder_name}"
         else:
-            # Относительный путь - создаем рядом
-            main_output_path = f"{folder_path}_Обработанный"
+            # Относительный путь
+            main_output_path = f"{folder_path}/{output_folder_name}"
         
         # Создаем папку для результатов
         async with httpx.AsyncClient() as client:
@@ -2163,9 +2162,14 @@ async def batch_process_folders(
                             logger.info(f"  Subfolder {subfolder_name} has no image files")
                             continue
                         
-                        # Создаем папку для результатов этой подпапки
-                        subfolder_output_name = f"{subfolder_name}_Обработанный"
-                        subfolder_output_path = f"{main_output_path}/{subfolder_output_name}"
+                        # Создаем папку для результатов этой подпапки внутри самой подпапки
+                        # Используем путь к подпапке + "Обработанный"
+                        if use_public_api:
+                            subfolder_full_path = f"{folder_path}/{subfolder_name}" if folder_path else subfolder_name
+                        else:
+                            subfolder_full_path = subfolder_path
+                        
+                        subfolder_output_path = f"{subfolder_full_path}/Обработанный"
                         
                         async with httpx.AsyncClient() as create_client:
                             create_response = await create_client.put(
