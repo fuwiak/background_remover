@@ -1701,6 +1701,120 @@ async def send_progress_update(message: dict):
     """Helper function to format progress update as SSE"""
     return f"data: {json_lib.dumps(message, ensure_ascii=False)}\n\n"
 
+async def convert_yandex_url_to_d_format(url: str) -> str:
+    """
+    Преобразует URL формата /client/disk/... в формат /d/ID
+    Парсит HTML страницы Яндекс Диска для извлечения ID папки
+    """
+    logger = logging.getLogger(__name__)
+    
+    # Если URL уже в формате /d/ID, возвращаем как есть
+    match = re.search(r'/d/([^/?]+)', url)
+    if match:
+        return url
+    
+    # Проверяем формат /client/disk/...
+    match = re.search(r'/client/disk/([^/?]+)', url)
+    if not match:
+        raise HTTPException(
+            status_code=400,
+            detail="Неверный формат URL. Ожидается формат: https://disk.yandex.ru/d/ID или https://disk.yandex.ru/client/disk/..."
+        )
+    
+    logger.info(f"Converting Yandex Disk URL from /client/disk/ format: {url}")
+    
+    try:
+        # Парсим HTML страницы для извлечения ID папки
+        async with httpx.AsyncClient() as client:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7'
+            }
+            response = await client.get(
+                url,
+                headers=headers,
+                timeout=30.0,
+                follow_redirects=True
+            )
+            
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Не удалось загрузить страницу Яндекс Диска: {response.status_code}"
+                )
+            
+            html = response.text
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            # Метод 1: Ищем ID в мета-тегах
+            meta_tags = soup.find_all('meta')
+            for meta in meta_tags:
+                property_attr = meta.get('property', '')
+                content = meta.get('content', '')
+                if 'yandex-disk' in property_attr.lower() or 'disk' in property_attr.lower():
+                    # Пробуем найти ID в content
+                    match = re.search(r'/d/([^/?]+)', content)
+                    if match:
+                        folder_id = match.group(1)
+                        converted_url = f"https://disk.yandex.ru/d/{folder_id}"
+                        logger.info(f"Found folder ID in meta tags: {folder_id}")
+                        return converted_url
+            
+            # Метод 2: Ищем ID в JavaScript коде (window.__INITIAL_STATE__ или подобное)
+            scripts = soup.find_all('script')
+            for script in scripts:
+                if not script.string:
+                    continue
+                
+                script_text = script.string
+                
+                # Ищем паттерны с ID папки
+                patterns = [
+                    r'"public_key"\s*:\s*"([^"]+)"',
+                    r'"folderId"\s*:\s*"([^"]+)"',
+                    r'"id"\s*:\s*"([^"]+)"',
+                    r'/d/([a-zA-Z0-9_-]+)',
+                    r'public_key["\']?\s*[:=]\s*["\']([^"\']+)["\']',
+                ]
+                
+                for pattern in patterns:
+                    matches = re.finditer(pattern, script_text)
+                    for match in matches:
+                        potential_id = match.group(1) if match.groups() else match.group(0)
+                        # Проверяем, что это похоже на ID (обычно содержит буквы, цифры, дефисы, подчеркивания)
+                        if re.match(r'^[a-zA-Z0-9_-]+$', potential_id) and len(potential_id) > 5:
+                            converted_url = f"https://disk.yandex.ru/d/{potential_id}"
+                            logger.info(f"Found folder ID in script: {potential_id}")
+                            return converted_url
+            
+            # Метод 3: Ищем ссылки на /d/ID в HTML
+            links = soup.find_all('a', href=True)
+            for link in links:
+                href = link.get('href', '')
+                match = re.search(r'/d/([^/?]+)', href)
+                if match:
+                    folder_id = match.group(1)
+                    converted_url = f"https://disk.yandex.ru/d/{folder_id}"
+                    logger.info(f"Found folder ID in link: {folder_id}")
+                    return converted_url
+            
+            # Если не нашли ID, пробуем использовать оригинальный URL
+            # Но для пакетной обработки нужен именно ID, поэтому выбрасываем ошибку
+            raise HTTPException(
+                status_code=400,
+                detail="Не удалось извлечь ID папки из URL. Убедитесь, что папка публичная и доступна."
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error converting Yandex Disk URL: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Ошибка при преобразовании URL: {str(e)}"
+        )
+
 @app.post("/api/batch-process-folders")
 async def batch_process_folders(
     base_path: str = Form("/"),
@@ -1780,10 +1894,28 @@ async def batch_process_folders(
                 use_public_api = True
                 logger.info(f"Extracted public folder ID: {public_key}")
             else:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Неверный формат URL. Ожидается формат: https://disk.yandex.ru/d/ID"
-                )
+                # Пробуем преобразовать URL формата /client/disk/... в формат /d/ID
+                try:
+                    converted_url = await convert_yandex_url_to_d_format(base_path)
+                    match = re.search(r'/d/([^/?]+)', converted_url)
+                    if match:
+                        public_key = match.group(1)
+                        use_public_api = True
+                        base_path = converted_url  # Обновляем base_path на преобразованный URL
+                        logger.info(f"Converted URL to /d/ format, extracted folder ID: {public_key}")
+                    else:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Неверный формат URL. Ожидается формат: https://disk.yandex.ru/d/ID или https://disk.yandex.ru/client/disk/..."
+                        )
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    logger.error(f"Error converting URL: {str(e)}")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Неверный формат URL. Ожидается формат: https://disk.yandex.ru/d/ID или https://disk.yandex.ru/client/disk/..."
+                    )
         
         # Получаем информацию о выбранной папке и файлах в ней
         logger.info(f"Fetching files from Yandex Disk folder, path: {actual_path}, use_public_api: {use_public_api}")
