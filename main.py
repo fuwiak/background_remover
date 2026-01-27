@@ -2398,113 +2398,113 @@ async def batch_process_folders(
                                     
                                     # Для первой фотографии создаем версию с дизайном (размещение на фоне)
                                     if file_idx == 0 and is_first_in_folder:
-                                    try:
-                                        # Получаем путь к фону
-                                        background_paths = [
-                                            "/app/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg",
-                                            os.path.expanduser("~/background_remover/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg"),
-                                            "./background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg",
-                                            "background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg"
-                                        ]
-                                        
-                                        background_path = None
-                                        for path in background_paths:
-                                            if os.path.exists(path):
-                                                background_path = path
-                                                break
-                                        
-                                        if background_path:
-                                            with open(background_path, 'rb') as f:
-                                                background_bytes = f.read()
+                                        try:
+                                            # Получаем путь к фону
+                                            background_paths = [
+                                                "/app/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg",
+                                                os.path.expanduser("~/background_remover/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg"),
+                                                "./background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg",
+                                                "background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg"
+                                            ]
                                             
-                                            processed_file_obj = io.BytesIO(processed_bytes)
-                                            processed_file_obj.name = "processed.png"
-                                            background_file_obj = io.BytesIO(background_bytes)
-                                            background_file_obj.name = "background.jpeg"
+                                            background_path = None
+                                            for path in background_paths:
+                                                if os.path.exists(path):
+                                                    background_path = path
+                                                    break
                                             
-                                            os.environ["REPLICATE_API_TOKEN"] = api_key
-                                            
-                                            default_prompt = """Add the product from @img2 to the image @img1. The product must levitate directly above the podium, barely touching the podium surface, with a visible contact shadow."""
-                                            
-                                            processed_file_obj.seek(0)
-                                            background_file_obj.seek(0)
-                                            
-                                            model_input = {
-                                                "images": [background_file_obj, processed_file_obj],
-                                                "prompt": default_prompt,
-                                                "aspect_ratio": "4:3"
-                                            }
-                                            
-                                            yield await send_progress_update({
-                                                "type": "design_start",
-                                                "folder_name": current_name,
-                                                "file_name": file_name,
-                                                "message": f"Создание дизайна для: {file_name}"
-                                            })
-                                            
-                                            design_output = await asyncio.to_thread(
-                                                replicate.run,
-                                                "prunaai/p-image-edit",
-                                                input=model_input
-                                            )
-                                            
-                                            p_image_edit_count += 1
-                                            
-                                            design_bytes = None
-                                            if hasattr(design_output, 'read'):
-                                                design_bytes = design_output.read()
-                                            elif isinstance(design_output, str):
-                                                async with httpx.AsyncClient() as http_client:
-                                                    response = await http_client.get(design_output, timeout=60.0)
-                                                    if response.status_code == 200:
-                                                        design_bytes = response.content
-                                            elif isinstance(design_output, list) and len(design_output) > 0:
-                                                first_item = design_output[0]
-                                                if hasattr(first_item, 'read'):
-                                                    design_bytes = first_item.read()
-                                                elif isinstance(first_item, str):
+                                            if background_path:
+                                                with open(background_path, 'rb') as f:
+                                                    background_bytes = f.read()
+                                                
+                                                processed_file_obj = io.BytesIO(processed_bytes)
+                                                processed_file_obj.name = "processed.png"
+                                                background_file_obj = io.BytesIO(background_bytes)
+                                                background_file_obj.name = "background.jpeg"
+                                                
+                                                os.environ["REPLICATE_API_TOKEN"] = api_key
+                                                
+                                                default_prompt = """Add the product from @img2 to the image @img1. The product must levitate directly above the podium, barely touching the podium surface, with a visible contact shadow."""
+                                                
+                                                processed_file_obj.seek(0)
+                                                background_file_obj.seek(0)
+                                                
+                                                model_input = {
+                                                    "images": [background_file_obj, processed_file_obj],
+                                                    "prompt": default_prompt,
+                                                    "aspect_ratio": "4:3"
+                                                }
+                                                
+                                                yield await send_progress_update({
+                                                    "type": "design_start",
+                                                    "folder_name": current_name,
+                                                    "file_name": file_name,
+                                                    "message": f"Создание дизайна для: {file_name}"
+                                                })
+                                                
+                                                design_output = await asyncio.to_thread(
+                                                    replicate.run,
+                                                    "prunaai/p-image-edit",
+                                                    input=model_input
+                                                )
+                                                
+                                                p_image_edit_count += 1
+                                                
+                                                design_bytes = None
+                                                if hasattr(design_output, 'read'):
+                                                    design_bytes = design_output.read()
+                                                elif isinstance(design_output, str):
                                                     async with httpx.AsyncClient() as http_client:
-                                                        response = await http_client.get(first_item, timeout=60.0)
+                                                        response = await http_client.get(design_output, timeout=60.0)
                                                         if response.status_code == 200:
                                                             design_bytes = response.content
-                                            
-                                            if design_bytes:
-                                                # Сохраняем дизайн на Yandex Disk в ту же папку
-                                                design_name = f"{file_name.rsplit('.', 1)[0]}_design.png"
-                                                design_save_path = f"{output_path}/{design_name}"
+                                                elif isinstance(design_output, list) and len(design_output) > 0:
+                                                    first_item = design_output[0]
+                                                    if hasattr(first_item, 'read'):
+                                                        design_bytes = first_item.read()
+                                                    elif isinstance(first_item, str):
+                                                        async with httpx.AsyncClient() as http_client:
+                                                            response = await http_client.get(first_item, timeout=60.0)
+                                                            if response.status_code == 200:
+                                                                design_bytes = response.content
                                                 
-                                                async with httpx.AsyncClient() as design_client:
-                                                    upload_link_response = await design_client.get(
-                                                        "https://cloud-api.yandex.net/v1/disk/resources/upload",
-                                                        params={"path": design_save_path, "overwrite": "true"},
-                                                        headers={"Authorization": f"OAuth {token}"},
-                                                        timeout=30.0
-                                                    )
+                                                if design_bytes:
+                                                    # Сохраняем дизайн на Yandex Disk в ту же папку
+                                                    design_name = f"{file_name.rsplit('.', 1)[0]}_design.png"
+                                                    design_save_path = f"{output_path}/{design_name}"
                                                     
-                                                    if upload_link_response.status_code == 200:
-                                                        upload_url = upload_link_response.json()["href"]
-                                                        upload_response = await design_client.put(
-                                                            upload_url,
-                                                            content=design_bytes,
-                                                            headers={"Content-Type": "image/png"},
-                                                            timeout=60.0
+                                                    async with httpx.AsyncClient() as design_client:
+                                                        upload_link_response = await design_client.get(
+                                                            "https://cloud-api.yandex.net/v1/disk/resources/upload",
+                                                            params={"path": design_save_path, "overwrite": "true"},
+                                                            headers={"Authorization": f"OAuth {token}"},
+                                                            timeout=30.0
                                                         )
                                                         
-                                                        if upload_response.status_code in [201, 202]:
-                                                            results["design_created"] = True
-                                                            logger.info(f"    Saved design: {design_name}")
+                                                        if upload_link_response.status_code == 200:
+                                                            upload_url = upload_link_response.json()["href"]
+                                                            upload_response = await design_client.put(
+                                                                upload_url,
+                                                                content=design_bytes,
+                                                                headers={"Content-Type": "image/png"},
+                                                                timeout=60.0
+                                                            )
                                                             
-                                                            yield await send_progress_update({
-                                                                "type": "design_complete",
-                                                                "folder_name": current_name,
-                                                                "file_name": file_name,
-                                                                "design_name": design_name,
-                                                                "message": f"✓ Дизайн создан и сохранен: {design_name}"
-                                                            })
-                                    
-                                    except Exception as e:
-                                        logger.warning(f"    Failed to create design for {file_name}: {str(e)}")
-                                        results["errors"].append(f"Design creation failed: {str(e)}")
+                                                            if upload_response.status_code in [201, 202]:
+                                                                results["design_created"] = True
+                                                                logger.info(f"    Saved design: {design_name}")
+                                                                
+                                                                yield await send_progress_update({
+                                                                    "type": "design_complete",
+                                                                    "folder_name": current_name,
+                                                                    "file_name": file_name,
+                                                                    "design_name": design_name,
+                                                                    "message": f"✓ Дизайн создан и сохранен: {design_name}"
+                                                                })
+                                        
+                                        except Exception as e:
+                                            logger.warning(f"    Failed to create design for {file_name}: {str(e)}")
+                                            results["errors"].append(f"Design creation failed: {str(e)}")
                                 
                                 except Exception as e:
                                     logger.error(f"    Error processing {file_info.get('name', 'unknown')}: {str(e)}")
