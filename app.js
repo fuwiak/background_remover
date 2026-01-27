@@ -359,7 +359,6 @@ class App {
         this.yandexFiles = [];
         this.processedImageBlob = null; // Обработанное изображение без шаблона (для изменения разрешения)
         this.backgroundImage = null; // Изображение на фоне
-        this.recentFolders = this.loadRecentFolders(); // Загружаем последние обработанные папки
         this.init();
     }
 
@@ -509,15 +508,13 @@ class App {
             this.continueBatchProcessing();
         });
 
-        // Кнопка обновления списка последних папок
-        document.getElementById('refreshRecentBtn').addEventListener('click', () => {
-            this.refreshRecentFolders();
-        });
-
         // Кнопка открытия правой панели с обработанными папками
-        document.getElementById('openProcessedSidebarBtn').addEventListener('click', () => {
-            this.loadProcessedFolders();
-        });
+        const openProcessedSidebarBtn = document.getElementById('openProcessedSidebarBtn');
+        if (openProcessedSidebarBtn) {
+            openProcessedSidebarBtn.addEventListener('click', () => {
+                this.loadProcessedFolders();
+            });
+        }
 
         // Закрытие правой панели
         document.getElementById('closeProcessedSidebar').addEventListener('click', () => {
@@ -527,9 +524,6 @@ class App {
         document.getElementById('processedSidebarOverlay').addEventListener('click', () => {
             this.closeProcessedSidebar();
         });
-
-        // Инициализируем отображение последних папок
-        this.renderRecentFolders();
     }
 
     stopBatchProcessing() {
@@ -1784,10 +1778,6 @@ class App {
                 linksContainer.style.display = 'block';
             }
 
-            // Добавляем папки в список последних обработанных
-            processedFolders.forEach(folder => {
-                this.addRecentFolder(folder);
-            });
 
             const foldersCount = result.folders_processed || foldersList.length;
             const costMsg = result.total_cost ? ` Стоимость: $${result.total_cost.toFixed(2)}` : '';
@@ -2186,190 +2176,6 @@ Do not crop or resize the image.`;
         });
     }
 
-    // Управление последними обработанными папками
-    loadRecentFolders() {
-        try {
-            const stored = localStorage.getItem('recent_processed_folders');
-            if (stored) {
-                return JSON.parse(stored);
-            }
-        } catch (error) {
-            console.error('Error loading recent folders:', error);
-        }
-        return [];
-    }
-
-    saveRecentFolders() {
-        try {
-            localStorage.setItem('recent_processed_folders', JSON.stringify(this.recentFolders));
-        } catch (error) {
-            console.error('Error saving recent folders:', error);
-        }
-    }
-
-    addRecentFolder(folderInfo) {
-        // Проверяем, нет ли уже такой папки
-        const existingIndex = this.recentFolders.findIndex(
-            f => f.path === folderInfo.path && f.name === folderInfo.name
-        );
-        
-        if (existingIndex !== -1) {
-            // Обновляем существующую запись
-            this.recentFolders[existingIndex] = {
-                ...folderInfo,
-                timestamp: new Date().toISOString()
-            };
-        } else {
-            // Добавляем новую запись в начало
-            this.recentFolders.unshift({
-                ...folderInfo,
-                timestamp: new Date().toISOString()
-            });
-        }
-        
-        // Ограничиваем количество до 20 последних папок
-        if (this.recentFolders.length > 20) {
-            this.recentFolders = this.recentFolders.slice(0, 20);
-        }
-        
-        this.saveRecentFolders();
-        this.renderRecentFolders();
-    }
-
-    renderRecentFolders() {
-        const container = document.getElementById('recentFoldersContainer');
-        if (!container) return;
-
-        if (this.recentFolders.length === 0) {
-            container.innerHTML = `
-                <div class="recent-empty-state">
-                    <p>Здесь будут отображаться последние обработанные папки</p>
-                    <p class="recent-hint">После завершения пакетной обработки папки появятся здесь автоматически</p>
-                </div>
-            `;
-            return;
-        }
-
-        container.innerHTML = this.recentFolders.map(folder => {
-            const timestamp = new Date(folder.timestamp);
-            const timeStr = timestamp.toLocaleString('ru-RU', {
-                day: '2-digit',
-                month: '2-digit',
-                year: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit'
-            });
-
-            // Формируем URL для Яндекс Диска
-            const yandexUrl = `https://disk.yandex.ru/client/disk${folder.path}`;
-
-            return `
-                <div class="recent-folder-card">
-                    <div class="recent-folder-header">
-                        <span class="recent-folder-icon">📁</span>
-                        <span class="recent-folder-name">${this.escapeHtml(folder.name)}</span>
-                    </div>
-                    <div class="recent-folder-info">
-                        <div class="recent-folder-info-item">
-                            <span class="recent-folder-info-icon">📄</span>
-                            <span>Обработано файлов: ${folder.files_processed || 0}</span>
-                        </div>
-                        ${folder.design_created ? `
-                            <div class="recent-folder-info-item">
-                                <span class="recent-folder-info-icon">🎨</span>
-                                <span style="color: var(--success-color);">Создан дизайн</span>
-                            </div>
-                        ` : ''}
-                        ${folder.errors && folder.errors.length > 0 ? `
-                            <div class="recent-folder-info-item">
-                                <span class="recent-folder-info-icon">⚠️</span>
-                                <span style="color: var(--error-color);">Ошибок: ${folder.errors.length}</span>
-                            </div>
-                        ` : ''}
-                        <div class="recent-folder-info-item">
-                            <span class="recent-folder-info-icon">📍</span>
-                            <span style="font-size: 11px; opacity: 0.8;">${this.escapeHtml(folder.path)}</span>
-                        </div>
-                    </div>
-                    <div class="recent-folder-timestamp">${timeStr}</div>
-                    <div class="recent-folder-actions">
-                        <a href="${yandexUrl}" target="_blank" class="recent-folder-action-btn">
-                            <span>🔗</span>
-                            <span>Открыть в Яндекс Диске</span>
-                        </a>
-                        <button class="recent-folder-action-btn" onclick="app.openFolderInSidebar('${this.escapeHtml(folder.path)}')">
-                            <span>📂</span>
-                            <span>Открыть здесь</span>
-                        </button>
-                    </div>
-                </div>
-            `;
-        }).join('');
-    }
-
-    escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
-    async refreshRecentFolders() {
-        // Обновляем информацию о папках из Яндекс Диска
-        const hasToken = await this.yandexDisk.checkAuth();
-        if (!hasToken) {
-            this.showError('Необходима авторизация в Яндекс Диске для обновления списка');
-            return;
-        }
-
-        const refreshBtn = document.getElementById('refreshRecentBtn');
-        refreshBtn.disabled = true;
-        refreshBtn.textContent = '⏳';
-
-        try {
-            // Ищем все обработанные папки заново
-            const foundFolders = await this.findProcessedFoldersRecursive("/");
-            
-            // Обновляем список, объединяя найденные папки с сохраненными данными
-            const updatedFolders = [];
-            
-            for (const foundFolder of foundFolders) {
-                // Ищем сохраненную информацию о папке
-                const savedInfo = this.recentFolders.find(f => 
-                    f.path === foundFolder.path || 
-                    f.name === foundFolder.name
-                );
-                
-                if (savedInfo) {
-                    // Обновляем путь и сохраняем метаданные
-                    updatedFolders.push({
-                        ...savedInfo,
-                        path: foundFolder.path,
-                        name: foundFolder.name,
-                        exists: true
-                    });
-                } else {
-                    // Добавляем новую папку
-                    updatedFolders.push({
-                        ...foundFolder,
-                        exists: true
-                    });
-                }
-            }
-
-            // Обновляем список
-            this.recentFolders = updatedFolders;
-            this.saveRecentFolders();
-            this.renderRecentFolders();
-            
-            this.showMessage(`Список обновлен. Найдено ${updatedFolders.length} папок`, 'success');
-        } catch (error) {
-            console.error('Error refreshing folders:', error);
-            this.showError('Ошибка обновления списка: ' + error.message);
-        } finally {
-            refreshBtn.disabled = false;
-            refreshBtn.textContent = '🔄';
-        }
-    }
 
     async openFolderInSidebar(folderPath) {
         try {
@@ -2550,6 +2356,12 @@ Do not crop or resize the image.`;
         } catch (error) {
             this.showError('Ошибка открытия папки: ' + error.message);
         }
+    }
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 }
 

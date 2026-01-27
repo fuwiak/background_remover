@@ -88,30 +88,15 @@
                         <input type="text" id="yandexUrlInput" class="input" placeholder="https://disk.yandex.ru/d/-uXMLsCHrFtxzg" value="https://disk.yandex.ru/client/disk/Тест комтех">
                         <button id="loadYandexFilesBtn" class="btn btn-small">Загрузить файлы</button>
                     </div>
-                    <button id="openSidebarBtn" class="btn">Открыть список файлов</button>
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                        <button id="openSidebarBtn" class="btn">Открыть список файлов</button>
+                        <button id="openProcessedSidebarBtn" class="btn" title="Показать все обработанные папки">📁 Обработанные папки</button>
+                    </div>
                     <div id="batchProgress" class="progress-container" style="display: none; margin-top: 16px;">
                         <div class="progress-bar">
                             <div id="progressFill" class="progress-fill"></div>
                         </div>
                         <div id="progressText" class="progress-text">0 / 0</div>
-                    </div>
-                </div>
-
-                <!-- Панель последних обработанных папок -->
-                <div class="recent-panel">
-                    <div class="panel-header-with-refresh">
-                        <h2 class="panel-title">📁 Обработанные папки</h2>
-                        <div style="display: flex; gap: 8px;">
-                            <button id="openProcessedSidebarBtn" class="btn btn-small" title="Открыть список обработанных папок">📂 Показать все</button>
-                            <button id="refreshRecentBtn" class="btn btn-small" title="Обновить список">🔄</button>
-                        </div>
-                    </div>
-                    <div id="recentFoldersContainer" class="recent-folders-container">
-                        <div class="recent-empty-state">
-                            <p>Здесь будут отображаться последние обработанные папки</p>
-                            <p class="recent-hint">После завершения пакетной обработки папки появятся здесь автоматически</p>
-                            <p class="recent-hint">Нажмите "Показать все" для просмотра всех папок с суффиксом "_Обработанный"</p>
-                        </div>
                     </div>
                 </div>
 
