@@ -359,6 +359,7 @@ class App {
         this.yandexFiles = [];
         this.processedImageBlob = null; // Обработанное изображение без шаблона (для изменения разрешения)
         this.backgroundImage = null; // Изображение на фоне
+        this.recentFolders = this.loadRecentFolders(); // Загружаем последние обработанные папки
         this.init();
     }
 
@@ -507,6 +508,14 @@ class App {
         document.getElementById('continueBatchProcessBtn').addEventListener('click', () => {
             this.continueBatchProcessing();
         });
+
+        // Кнопка обновления списка последних папок
+        document.getElementById('refreshRecentBtn').addEventListener('click', () => {
+            this.refreshRecentFolders();
+        });
+
+        // Инициализируем отображение последних папок
+        this.renderRecentFolders();
     }
 
     stopBatchProcessing() {
@@ -1668,20 +1677,32 @@ class App {
             
             let html = `<div style="background: rgba(0,255,0,0.1); padding: 12px; border-radius: 4px; margin-bottom: 16px;">`;
             html += `<h3 style="margin: 0 0 8px 0; color: var(--text-color);">✓ Обработка завершена!</h3>`;
-            html += `<p style="margin: 4px 0; color: var(--text-color);"><strong>Обработано папок:</strong> ${result.folders_processed}</p>`;
-            html += `<p style="margin: 4px 0; color: var(--text-color);"><strong>Удаление фона:</strong> ${result.total_background_removal} изображений</p>`;
-            html += `<p style="margin: 4px 0; color: var(--text-color);"><strong>Создано дизайнов:</strong> ${result.total_design_created}</p>`;
-            html += `<p style="margin: 4px 0; color: #ffd700; font-size: 18px; font-weight: bold;"><strong>💰 ОБЩАЯ СТОИМОСТЬ: $${result.total_cost.toFixed(2)}</strong></p>`;
-            html += `<p style="margin: 4px 0; color: var(--text-color); font-size: 12px;">Детали: Background removal (${result.cost_breakdown.background_removal.count} × $${result.cost_breakdown.background_removal.cost_per_image}) = $${result.cost_breakdown.background_removal.total.toFixed(2)}</p>`;
-            html += `<p style="margin: 4px 0; color: var(--text-color); font-size: 12px;">prunaai/p-image-edit (${result.cost_breakdown.p_image_edit.count} × $${result.cost_breakdown.p_image_edit.cost_per_image}) = $${result.cost_breakdown.p_image_edit.total.toFixed(2)}</p>`;
-            html += `<p style="margin: 8px 0 0 0; color: var(--text-color); font-size: 11px; opacity: 0.7;">Детальная информация сохранена в файл costs.log</p>`;
+            html += `<p style="margin: 4px 0; color: var(--text-color);"><strong>Обработано папок:</strong> ${result.folders_processed || 1}</p>`;
+            html += `<p style="margin: 4px 0; color: var(--text-color);"><strong>Удаление фона:</strong> ${result.total_background_removal || 0} изображений</p>`;
+            html += `<p style="margin: 4px 0; color: var(--text-color);"><strong>Создано дизайнов:</strong> ${result.total_design_created || 0}</p>`;
+            if (result.total_cost) {
+                html += `<p style="margin: 4px 0; color: #ffd700; font-size: 18px; font-weight: bold;"><strong>💰 ОБЩАЯ СТОИМОСТЬ: $${result.total_cost.toFixed(2)}</strong></p>`;
+                if (result.cost_breakdown) {
+                    html += `<p style="margin: 4px 0; color: var(--text-color); font-size: 12px;">Детали: Background removal (${result.cost_breakdown.background_removal?.count || 0} × $${result.cost_breakdown.background_removal?.cost_per_image || 0}) = $${(result.cost_breakdown.background_removal?.total || 0).toFixed(2)}</p>`;
+                    html += `<p style="margin: 4px 0; color: var(--text-color); font-size: 12px;">prunaai/p-image-edit (${result.cost_breakdown.p_image_edit?.count || 0} × $${result.cost_breakdown.p_image_edit?.cost_per_image || 0}) = $${(result.cost_breakdown.p_image_edit?.total || 0).toFixed(2)}</p>`;
+                }
+                html += `<p style="margin: 8px 0 0 0; color: var(--text-color); font-size: 11px; opacity: 0.7;">Детальная информация сохранена в файл costs.log</p>`;
+            }
             html += `</div>`;
             html += '<hr style="margin: 16px 0; border-color: var(--border-color);">';
 
-            result.results.forEach((folder, idx) => {
+            // Формируем пути к обработанным папкам
+            const processedFolders = [];
+            const linksHtml = [];
+
+            // result.results может быть массивом или объектом
+            const foldersList = Array.isArray(result.results) ? result.results : (result.results ? [result.results] : []);
+            
+            foldersList.forEach((folder, idx) => {
+                const folderName = folder.folder_name || 'Обработанная_папка';
                 html += `<div style="margin-bottom: 16px; padding: 12px; background: rgba(0,0,0,0.1); border-radius: 4px;">`;
-                html += `<h4 style="margin: 0 0 8px 0; color: var(--text-color);">${folder.folder_name}</h4>`;
-                html += `<p style="margin: 0 0 8px 0; color: var(--text-color); font-size: 12px;">Обработано файлов: ${folder.files_processed}</p>`;
+                html += `<h4 style="margin: 0 0 8px 0; color: var(--text-color);">${folderName}</h4>`;
+                html += `<p style="margin: 0 0 8px 0; color: var(--text-color); font-size: 12px;">Обработано файлов: ${folder.files_processed || 0}</p>`;
                 
                 if (folder.design_created) {
                     html += `<p style="margin: 0 0 8px 0; color: var(--primary-color); font-size: 12px;">✓ Создана версия с дизайном</p>`;
@@ -1691,12 +1712,58 @@ class App {
                     html += `<p style="margin: 0 0 8px 0; color: #ff6b6b; font-size: 12px;">⚠ Ошибки: ${folder.errors.join(', ')}</p>`;
                 }
                 
-                html += `<p style="margin: 0; color: var(--text-color); font-size: 11px; opacity: 0.7;">Файлы сохранены в: ${folder.folder_path}/${outputFolder}</p>`;
+                // Определяем путь к обработанной папке
+                const folderPath = folder.folder_path || '';
+                const parentPath = folderPath.split('/').slice(0, -1).join('/') || '/';
+                const outputFolderName = `${folderName}_Обработанный`;
+                const processedPath = parentPath === '/' ? `/${outputFolderName}` : `${parentPath}/${outputFolderName}`;
+                
+                html += `<p style="margin: 0; color: var(--text-color); font-size: 11px; opacity: 0.7;">Файлы сохранены в: ${processedPath}</p>`;
                 html += `</div>`;
+
+                // Сохраняем информацию о папке для добавления в список последних
+                processedFolders.push({
+                    name: outputFolderName,
+                    path: processedPath,
+                    files_processed: folder.files_processed || 0,
+                    design_created: folder.design_created || false,
+                    errors: folder.errors || []
+                });
+
+                // Добавляем ссылку
+                const yandexUrl = `https://disk.yandex.ru/client/disk${processedPath}`;
+                linksHtml.push(`
+                    <div style="display: flex; align-items: center; gap: 12px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 6px;">
+                        <span style="font-size: 18px;">📁</span>
+                        <div style="flex: 1;">
+                            <div style="font-weight: 600; color: var(--text-color); font-size: 14px;">${outputFolderName}</div>
+                            <div style="font-size: 11px; color: var(--text-secondary);">${processedPath}</div>
+                        </div>
+                        <a href="${yandexUrl}" target="_blank" class="btn btn-small" style="text-decoration: none; white-space: nowrap;">
+                            Открыть →
+                        </a>
+                    </div>
+                `);
             });
 
             resultsContent.innerHTML = html;
-            this.showMessage(`Обработка завершена! Обработано ${result.folders_processed} папок. Стоимость: $${result.total_cost.toFixed(2)}`, 'success');
+
+            // Показываем быстрые ссылки
+            const linksContainer = document.getElementById('batchResultsLinks');
+            const linksContent = document.getElementById('batchResultsLinksContent');
+            if (linksContainer && linksContent && linksHtml.length > 0) {
+                linksContent.innerHTML = linksHtml.join('');
+                linksContainer.style.display = 'block';
+            }
+
+            // Добавляем папки в список последних обработанных
+            processedFolders.forEach(folder => {
+                this.addRecentFolder(folder);
+            });
+
+            const foldersCount = result.folders_processed || foldersList.length;
+            const costMsg = result.total_cost ? ` Стоимость: $${result.total_cost.toFixed(2)}` : '';
+            this.showMessage(`Обработка завершена! Обработано ${foldersCount} папок.${costMsg}`, 'success');
 
         } catch (error) {
             loadingIndicator.style.display = 'none';
@@ -2089,6 +2156,182 @@ Do not crop or resize the image.`;
                 }
             }
         });
+    }
+
+    // Управление последними обработанными папками
+    loadRecentFolders() {
+        try {
+            const stored = localStorage.getItem('recent_processed_folders');
+            if (stored) {
+                return JSON.parse(stored);
+            }
+        } catch (error) {
+            console.error('Error loading recent folders:', error);
+        }
+        return [];
+    }
+
+    saveRecentFolders() {
+        try {
+            localStorage.setItem('recent_processed_folders', JSON.stringify(this.recentFolders));
+        } catch (error) {
+            console.error('Error saving recent folders:', error);
+        }
+    }
+
+    addRecentFolder(folderInfo) {
+        // Проверяем, нет ли уже такой папки
+        const existingIndex = this.recentFolders.findIndex(
+            f => f.path === folderInfo.path && f.name === folderInfo.name
+        );
+        
+        if (existingIndex !== -1) {
+            // Обновляем существующую запись
+            this.recentFolders[existingIndex] = {
+                ...folderInfo,
+                timestamp: new Date().toISOString()
+            };
+        } else {
+            // Добавляем новую запись в начало
+            this.recentFolders.unshift({
+                ...folderInfo,
+                timestamp: new Date().toISOString()
+            });
+        }
+        
+        // Ограничиваем количество до 20 последних папок
+        if (this.recentFolders.length > 20) {
+            this.recentFolders = this.recentFolders.slice(0, 20);
+        }
+        
+        this.saveRecentFolders();
+        this.renderRecentFolders();
+    }
+
+    renderRecentFolders() {
+        const container = document.getElementById('recentFoldersContainer');
+        if (!container) return;
+
+        if (this.recentFolders.length === 0) {
+            container.innerHTML = `
+                <div class="recent-empty-state">
+                    <p>Здесь будут отображаться последние обработанные папки</p>
+                    <p class="recent-hint">После завершения пакетной обработки папки появятся здесь автоматически</p>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = this.recentFolders.map(folder => {
+            const timestamp = new Date(folder.timestamp);
+            const timeStr = timestamp.toLocaleString('ru-RU', {
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+
+            // Формируем URL для Яндекс Диска
+            const yandexUrl = `https://disk.yandex.ru/client/disk${folder.path}`;
+
+            return `
+                <div class="recent-folder-card">
+                    <div class="recent-folder-header">
+                        <span class="recent-folder-icon">📁</span>
+                        <span class="recent-folder-name">${this.escapeHtml(folder.name)}</span>
+                    </div>
+                    <div class="recent-folder-info">
+                        <div class="recent-folder-info-item">
+                            <span class="recent-folder-info-icon">📄</span>
+                            <span>Обработано файлов: ${folder.files_processed || 0}</span>
+                        </div>
+                        ${folder.design_created ? `
+                            <div class="recent-folder-info-item">
+                                <span class="recent-folder-info-icon">🎨</span>
+                                <span style="color: var(--success-color);">Создан дизайн</span>
+                            </div>
+                        ` : ''}
+                        ${folder.errors && folder.errors.length > 0 ? `
+                            <div class="recent-folder-info-item">
+                                <span class="recent-folder-info-icon">⚠️</span>
+                                <span style="color: var(--error-color);">Ошибок: ${folder.errors.length}</span>
+                            </div>
+                        ` : ''}
+                        <div class="recent-folder-info-item">
+                            <span class="recent-folder-info-icon">📍</span>
+                            <span style="font-size: 11px; opacity: 0.8;">${this.escapeHtml(folder.path)}</span>
+                        </div>
+                    </div>
+                    <div class="recent-folder-timestamp">${timeStr}</div>
+                    <div class="recent-folder-actions">
+                        <a href="${yandexUrl}" target="_blank" class="recent-folder-action-btn">
+                            <span>🔗</span>
+                            <span>Открыть в Яндекс Диске</span>
+                        </a>
+                        <button class="recent-folder-action-btn" onclick="app.openFolderInSidebar('${this.escapeHtml(folder.path)}')">
+                            <span>📂</span>
+                            <span>Открыть здесь</span>
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    async refreshRecentFolders() {
+        // Обновляем информацию о папках из Яндекс Диска
+        const hasToken = await this.yandexDisk.checkAuth();
+        if (!hasToken) {
+            this.showError('Необходима авторизация в Яндекс Диске для обновления списка');
+            return;
+        }
+
+        const refreshBtn = document.getElementById('refreshRecentBtn');
+        refreshBtn.disabled = true;
+        refreshBtn.textContent = '⏳';
+
+        try {
+            // Проверяем существование папок и обновляем информацию
+            for (let folder of this.recentFolders) {
+                try {
+                    const structure = await this.yandexDisk.getStructure(folder.path, true);
+                    // Обновляем информацию о папке если нужно
+                    folder.exists = true;
+                } catch (error) {
+                    folder.exists = false;
+                }
+            }
+
+            // Удаляем несуществующие папки
+            this.recentFolders = this.recentFolders.filter(f => f.exists !== false);
+            this.saveRecentFolders();
+            this.renderRecentFolders();
+            
+            this.showMessage('Список обновлен', 'success');
+        } catch (error) {
+            console.error('Error refreshing folders:', error);
+            this.showError('Ошибка обновления списка: ' + error.message);
+        } finally {
+            refreshBtn.disabled = false;
+            refreshBtn.textContent = '🔄';
+        }
+    }
+
+    async openFolderInSidebar(folderPath) {
+        try {
+            const structure = await this.yandexDisk.getStructure(folderPath, true);
+            this.renderSidebarStructure(structure.structure);
+            this.openSidebar();
+        } catch (error) {
+            this.showError('Ошибка открытия папки: ' + error.message);
+        }
     }
 }
 

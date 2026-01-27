@@ -275,6 +275,165 @@ textarea.input {
     position: relative;
 }
 
+/* Recent Folders Panel */
+.recent-panel {
+    padding: 28px;
+    border: 2px solid var(--border-color);
+    background: rgba(26, 26, 53, 0.6);
+    backdrop-filter: blur(10px);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    position: relative;
+}
+
+.panel-header-with-refresh {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid var(--border-color);
+}
+
+.recent-folders-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+    min-height: 100px;
+}
+
+.recent-folder-card {
+    padding: 16px;
+    background: rgba(15, 15, 35, 0.6);
+    border: 2px solid var(--border-color);
+    border-radius: 8px;
+    transition: all 0.3s;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+}
+
+.recent-folder-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 4px;
+    height: 100%;
+    background: var(--primary-gradient);
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+
+.recent-folder-card:hover {
+    background: rgba(139, 92, 246, 0.15);
+    border-color: var(--accent-purple);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-hover);
+}
+
+.recent-folder-card:hover::before {
+    opacity: 1;
+}
+
+.recent-folder-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.recent-folder-icon {
+    font-size: 24px;
+    flex-shrink: 0;
+}
+
+.recent-folder-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-color);
+    flex: 1;
+    word-break: break-word;
+}
+
+.recent-folder-info {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.recent-folder-info-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.recent-folder-info-icon {
+    font-size: 14px;
+    opacity: 0.7;
+}
+
+.recent-folder-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+}
+
+.recent-folder-action-btn {
+    flex: 1;
+    padding: 8px 12px;
+    background: rgba(139, 92, 246, 0.2);
+    border: 1px solid var(--accent-purple);
+    color: var(--text-color);
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+    text-align: center;
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+
+.recent-folder-action-btn:hover {
+    background: var(--primary-gradient);
+    border-color: var(--accent-pink);
+    transform: scale(1.05);
+    box-shadow: var(--shadow);
+}
+
+.recent-empty-state {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-secondary);
+}
+
+.recent-empty-state p {
+    margin: 8px 0;
+    font-size: 14px;
+}
+
+.recent-hint {
+    font-size: 12px !important;
+    opacity: 0.7;
+    font-style: italic;
+}
+
+.recent-folder-timestamp {
+    font-size: 11px;
+    color: var(--disabled-color);
+    margin-top: 8px;
+    opacity: 0.6;
+}
+
 .panel-title {
     font-size: 18px;
     background: var(--primary-gradient);

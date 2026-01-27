@@ -83,6 +83,20 @@
                     </div>
                 </div>
 
+                <!-- Панель последних обработанных папок -->
+                <div class="recent-panel">
+                    <div class="panel-header-with-refresh">
+                        <h2 class="panel-title">📁 Последние обработанные папки</h2>
+                        <button id="refreshRecentBtn" class="btn btn-small" title="Обновить список">🔄</button>
+                    </div>
+                    <div id="recentFoldersContainer" class="recent-folders-container">
+                        <div class="recent-empty-state">
+                            <p>Здесь будут отображаться последние обработанные папки</p>
+                            <p class="recent-hint">После завершения пакетной обработки папки появятся здесь автоматически</p>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Два окна для фото -->
                 <div class="windows-container">
                     <!-- Левое окно - Upload -->
@@ -236,6 +250,10 @@
                             <div id="batchResults" style="display: none; margin-top: 16px;">
                                 <h3 style="color: var(--text-color); margin-bottom: 8px;">Результаты:</h3>
                                 <div id="batchResultsContent" style="max-height: 400px; overflow-y: auto; background: rgba(0,0,0,0.2); padding: 12px; border-radius: 4px;"></div>
+                            </div>
+                            <div id="batchResultsLinks" style="display: none; margin-top: 16px; padding: 16px; background: rgba(139, 92, 246, 0.1); border-radius: 8px; border: 2px solid var(--border-color);">
+                                <h4 style="color: var(--text-color); margin-bottom: 12px; font-size: 16px;">🔗 Быстрый доступ к результатам:</h4>
+                                <div id="batchResultsLinksContent" style="display: flex; flex-direction: column; gap: 8px;"></div>
                             </div>
                         </div>
                     </div>
