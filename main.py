@@ -7,7 +7,7 @@ import logging
 import base64
 from typing import Optional, List
 from datetime import datetime
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Query
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse, FileResponse
 import json as json_lib
@@ -1927,93 +1927,93 @@ async def convert_yandex_url_to_d_format(url: str) -> str:
         )
 
 @app.post("/api/batch-process-folders")
-async def batch_process_folders(
-    base_path: str = Form("/"),
-    model: str = Form("replicate"),
-    apiKey: Optional[str] = Form(None),
-    token: Optional[str] = Form(None),
-    width: int = Form(1200),
-    height: int = Form(1200),
-    output_folder: str = Form(""),
-    extra_photos: List[UploadFile] = File(default=[]),
-    background1: Optional[UploadFile] = File(None),
-    prompt1: Optional[str] = Form(None),
-    background2: Optional[UploadFile] = File(None),
-    prompt2: Optional[str] = Form(None),
-):
+async def batch_process_folders(request: Request):
     """
     Batch: удаление фона + дизайн 1 (фон1+промпт1 или дефолт) + опционально дизайн 2 (фон2+промпт2) + доп. фото в каждую папку.
+    Форма читается один раз из request.form(), чтобы гарантированно получить background1/background2.
     """
     logger = logging.getLogger(__name__)
     cost_logger = logging.getLogger('costs')
     
-    # Стоимость операций
-    COST_BACKGROUND_REMOVAL = 0.018  # $0.018 per image
-    COST_P_IMAGE_EDIT = 0.14  # $0.14 per image
-    
-    # Счетчики для расчета стоимости
+    COST_BACKGROUND_REMOVAL = 0.018
+    COST_P_IMAGE_EDIT = 0.14
     background_removal_count = 0
     p_image_edit_count = 0
     
     try:
-        # Получаем токен (из запроса или env variables)
-        if not token:
-            token = os.getenv("YANDEX_DISK_TOKEN")
+        form = await request.form()
+        base_path = form.get("base_path", "/") or "/"
+        model = form.get("model", "replicate") or "replicate"
+        apiKey = form.get("apiKey")
+        token = form.get("token") or os.getenv("YANDEX_DISK_TOKEN")
+        try:
+            width = int(form.get("width", 1200) or 1200)
+        except (TypeError, ValueError):
+            width = 1200
+        try:
+            height = int(form.get("height", 1200) or 1200)
+        except (TypeError, ValueError):
+            height = 1200
+        output_folder = form.get("output_folder") or ""
+        prompt1 = form.get("prompt1")
+        prompt2 = form.get("prompt2")
         
         if not token:
             logger.error("Yandex Disk token not found in request or environment variables")
             raise HTTPException(
-                status_code=401, 
+                status_code=401,
                 detail="Yandex Disk token not provided. Please authenticate via Yandex Disk OAuth or set YANDEX_DISK_TOKEN in Railway variables."
             )
         
         logger.info(f"Using Yandex Disk token: {'from request' if token != os.getenv('YANDEX_DISK_TOKEN') else 'from env variables'}")
         
-        # Получаем API ключ
         api_key = get_api_key(model, apiKey)
         if not api_key:
-            # Логируем для отладки
             logger.error(f"API key not found for model: {model}")
-            logger.error(f"apiKey from request: {'provided' if apiKey else 'not provided'}")
             if model == "replicate":
-                env_key_exists = bool(os.getenv('REPLICATE_API_KEY'))
-                logger.error(f"REPLICATE_API_KEY in env: {'exists' if env_key_exists else 'NOT FOUND - please set in Railway variables'}")
                 raise HTTPException(
-                    status_code=400, 
-                    detail=f"REPLICATE_API_KEY not found. Please set REPLICATE_API_KEY in Railway variables (Environment Variables section)."
+                    status_code=400,
+                    detail="REPLICATE_API_KEY not found. Please set REPLICATE_API_KEY in Railway variables (Environment Variables section)."
                 )
-            else:
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"API key not provided for model {model}. Please set it in Railway variables or provide it in the request."
-                )
+            raise HTTPException(
+                status_code=400,
+                detail=f"API key not provided for model {model}. Please set it in Railway variables or provide it in the request."
+            )
         
-        # Доп. фото для копирования в каждую папку Обработанный
+        # Доп. фото
         extra_photos_data: List[tuple] = []
-        for f in (extra_photos or []):
+        for f in form.getlist("extra_photos"):
             if getattr(f, "filename", None):
                 try:
                     extra_photos_data.append((f.filename, await f.read()))
                 except Exception as e:
                     logger.warning(f"Could not read extra photo {f.filename}: {e}")
         
-        # Дизайн 1 и 2 для батча (если не заданы — используется дефолтный фон и промпт только для дизайна 1)
+        # Дизайн 1 и 2 — по имени поля из формы
         batch_design1_bytes: Optional[bytes] = None
         batch_design1_prompt: Optional[str] = None
         batch_design2_bytes: Optional[bytes] = None
         batch_design2_prompt: Optional[str] = None
-        if background1 and getattr(background1, "filename", None):
+        bg1 = form.get("background1")
+        if bg1 is not None and hasattr(bg1, "read") and getattr(bg1, "filename", None):
             try:
-                batch_design1_bytes = await background1.read()
-                batch_design1_prompt = (prompt1 or "").strip() or None
+                batch_design1_bytes = await bg1.read()
+                batch_design1_prompt = (prompt1.strip() if isinstance(prompt1, str) else "") or None
+                logger.info(f"Batch design1: loaded {len(batch_design1_bytes)} bytes (custom background)")
             except Exception as e:
                 logger.warning(f"Could not read batch background1: {e}")
-        if background2 and getattr(background2, "filename", None):
+        else:
+            logger.info("Batch design1: no custom file, will use default background")
+        bg2 = form.get("background2")
+        if bg2 is not None and hasattr(bg2, "read") and getattr(bg2, "filename", None):
             try:
-                batch_design2_bytes = await background2.read()
-                batch_design2_prompt = (prompt2 or "").strip() or None
+                batch_design2_bytes = await bg2.read()
+                batch_design2_prompt = (prompt2.strip() if isinstance(prompt2, str) else "") or None
+                logger.info(f"Batch design2: loaded {len(batch_design2_bytes)} bytes (custom background)")
             except Exception as e:
                 logger.warning(f"Could not read batch background2: {e}")
+        else:
+            logger.info("Batch design2: no custom file")
         
         # Проверяем, является ли base_path URL или путем
         # Если это URL, используем API для публичных папок
