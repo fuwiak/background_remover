@@ -367,6 +367,8 @@ class App {
         this.modelManager.setCurrentModel('replicate');
         this.setupEventListeners();
         this.setupSliders();
+        // Дефолтный промпт для размещения продукта на фоне (синяя диагональная панель)
+        this.setDefaultBackgroundPrompt();
         // Инициализируем панель API ключей после загрузки DOM
         setTimeout(() => {
             this.setupApiKeysPanel();
@@ -1991,38 +1993,48 @@ class App {
     }
 
     setDefaultBackgroundPrompt() {
-        const defaultPrompt = `Add the product from @img2 to the image @img1.
+        const defaultPrompt = `Place the product from @img2 onto the background shown in @img1.
+This is a product placement task.
 
-The original image @img1 contains a podium without a levitating product; do not remove or replace any existing elements.
+PLACEMENT RULES:
+- The product must be placed ONLY on the blue diagonal panel on @img1.
+- The product must be aligned strictly along the diagonal direction of the blue panel.
+- The product must visually follow the diagonal line of the blue panel from bottom-left to top-right.
+- The product must remain visually contained within the diagonal shape of the blue panel.
+- The product must NOT cross or break the diagonal boundaries of the blue panel.
+- The only allowed exception is a slight exit on the right edge, no more than 10% of the product's total width.
+- The product must be large and visually dominant on the blue panel, not small or minimized.
+- The product must NOT overlap, touch, or visually intersect with any text, headings, subheadings, characteristic panels, badges, icons, logos, or characters.
+- All text and UI elements have absolute foreground priority over the product.
 
-The product must levitate directly above the podium, barely touching the podium surface, with a visible contact shadow.
+ABSOLUTE NO-GO ZONE (CRITICAL):
+- The white empty space under the heading and subheading on the left side MUST remain completely empty.
+- The product must NEVER enter, overlap, or visually fill this white area.
+- Treat this white area as a strict exclusion zone.
 
-The shadow cast by the product must appear ONLY on the top horizontal surface of the podium.
-The shadow must be restricted strictly to the upper flat surface where an object could be placed.
-No shadows are allowed on the podium sides, vertical faces, edges, or base.
-No shadows from the product are allowed on the background or any other surfaces.
+ORIENTATION AND PERSPECTIVE:
+- The product must be oriented vertically.
+- The product must be tilted along an ascending diagonal, from bottom-left to top-right, matching the blue panel direction.
+- If the product is wide or rectangular, push it into perspective (3/4 view) to make it visually narrower.
+- Always prioritize perspective narrowing and diagonal orientation over frontal placement.
 
-The product must be large, visually dominant, and clearly readable.
-The product must not appear small, distant, or miniature.
+REALISM:
+- Integrate the product realistically into the background.
+- Add a natural, realistic shadow consistent with the lighting of @img1.
+- The shadow must remain within the blue panel area.
 
-If the product from @img2 is horizontally oriented or elongated, rotate the product to a vertical orientation to improve composition and perceived size.
+COMPOSITION LOCK:
+- Do NOT move, resize, or modify any text, headings, logos, panels, or graphic elements.
+- Do NOT change colors, fonts, backgrounds, gradients, or layout.
+- Do NOT add any new objects.
 
-The product must be well-lit with hard directional lighting.
-Use hard-edged but soft-density shadows.
-Shadows must be light, natural, and semi-transparent, with no pure black or crushed shadows.
+QUALITY:
+- High-detail realistic product rendering.
+- Correct proportions, clean sharp edges.
+- No blur, no artifacts, no deformation.
 
-The product width must match the podium width exactly.
-The product must not be wider or narrower than the podium.
-
-The product height must start just above the podium surface and extend upward close to the top edge of the image without being cropped.
-
-Do not allow the product to overlap or cover any text elements or the character located on the right side of the image.
-
-Preserve the original camera angle, style, lighting direction, and color palette.
-Do not modify any existing elements except adding the product.
-
-Preserve the original image format, proportions, and horizontal 4:3 aspect ratio (1600×1200 equivalent).
-Do not crop or resize the image.`;
+Only the product from @img2 may be added.
+Everything else in @img1 must remain exactly the same`;
         
         const promptTextarea = document.getElementById('backgroundPrompt');
         if (promptTextarea) {
