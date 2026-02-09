@@ -252,6 +252,19 @@
                                 </div>
                             </div>
                             <div class="config-section" style="margin-bottom: 16px;">
+                                <label class="label">Дизайн 1 — фон:</label>
+                                <input type="file" id="batchBackground1" class="input" accept="image/*">
+                                <label style="display: block; margin: 8px 0 4px 0; font-size: 12px;">Промпт дизайна 1:</label>
+                                <textarea id="batchPrompt1" class="input" rows="4" style="width: 100%; resize: vertical; min-height: 80px;" placeholder="Не заполнено = дефолтный промпт"></textarea>
+                                <small style="color: var(--text-color); opacity: 0.7; display: block; margin-top: 4px;">Не выбрано = старый шаблон с сервера</small>
+                            </div>
+                            <div class="config-section" style="margin-bottom: 16px;">
+                                <label class="label">Дизайн 2 — фон:</label>
+                                <input type="file" id="batchBackground2" class="input" accept="image/*">
+                                <label style="display: block; margin: 8px 0 4px 0; font-size: 12px;">Промпт дизайна 2:</label>
+                                <textarea id="batchPrompt2" class="input" rows="4" style="width: 100%; resize: vertical; min-height: 80px;" placeholder="Опционально второй дизайн"></textarea>
+                            </div>
+                            <div class="config-section" style="margin-bottom: 16px;">
                                 <label class="label">Доп. фото в каждую папку:</label>
                                 <input type="file" id="batchExtraPhotosInput" class="input" accept="image/*" multiple>
                                 <small style="color: var(--text-color); opacity: 0.7; display: block; margin-top: 4px;">Эти фото будут добавлены в каждую папку «Обработанный»</small>

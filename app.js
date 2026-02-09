@@ -1591,6 +1591,18 @@ class App {
             formData.append('output_folder', outputFolder);
             if (apiKey) formData.append('apiKey', apiKey);
             if (token) formData.append('token', token);
+            const batchBg1 = document.getElementById('batchBackground1');
+            if (batchBg1 && batchBg1.files && batchBg1.files[0]) {
+                formData.append('background1', batchBg1.files[0]);
+                const p1 = document.getElementById('batchPrompt1');
+                if (p1) formData.append('prompt1', p1.value);
+            }
+            const batchBg2 = document.getElementById('batchBackground2');
+            if (batchBg2 && batchBg2.files && batchBg2.files[0]) {
+                formData.append('background2', batchBg2.files[0]);
+                const p2 = document.getElementById('batchPrompt2');
+                if (p2) formData.append('prompt2', p2.value);
+            }
             const extraPhotosInput = document.getElementById('batchExtraPhotosInput');
             if (extraPhotosInput && extraPhotosInput.files && extraPhotosInput.files.length > 0) {
                 for (const file of extraPhotosInput.files) {
@@ -2064,6 +2076,10 @@ Everything else in @img1 must remain exactly the same`;
         if (promptTextarea) promptTextarea.value = defaultPrompt;
         const promptTextarea2 = document.getElementById('backgroundPrompt2');
         if (promptTextarea2) promptTextarea2.value = defaultPrompt;
+        const batchP1 = document.getElementById('batchPrompt1');
+        if (batchP1) batchP1.value = defaultPrompt;
+        const batchP2 = document.getElementById('batchPrompt2');
+        if (batchP2) batchP2.value = defaultPrompt;
     }
 
     downloadBackground2() {

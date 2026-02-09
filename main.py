@@ -1935,13 +1935,14 @@ async def batch_process_folders(
     width: int = Form(1200),
     height: int = Form(1200),
     output_folder: str = Form(""),
-    extra_photos: List[UploadFile] = File(default=[])
+    extra_photos: List[UploadFile] = File(default=[]),
+    background1: Optional[UploadFile] = File(None),
+    prompt1: Optional[str] = Form(None),
+    background2: Optional[UploadFile] = File(None),
+    prompt2: Optional[str] = Form(None),
 ):
     """
-    Batch processing файлов из выбранной папки на Yandex Disk.
-    Результаты сохраняются в [название_папки]/Обработанный.
-    Для первой фотографии создается версия с дизайном.
-    Доп. фото (extra_photos) копируются в каждую папку Обработанный.
+    Batch: удаление фона + дизайн 1 (фон1+промпт1 или дефолт) + опционально дизайн 2 (фон2+промпт2) + доп. фото в каждую папку.
     """
     logger = logging.getLogger(__name__)
     cost_logger = logging.getLogger('costs')
@@ -1995,6 +1996,24 @@ async def batch_process_folders(
                     extra_photos_data.append((f.filename, await f.read()))
                 except Exception as e:
                     logger.warning(f"Could not read extra photo {f.filename}: {e}")
+        
+        # Дизайн 1 и 2 для батча (если не заданы — используется дефолтный фон и промпт только для дизайна 1)
+        batch_design1_bytes: Optional[bytes] = None
+        batch_design1_prompt: Optional[str] = None
+        batch_design2_bytes: Optional[bytes] = None
+        batch_design2_prompt: Optional[str] = None
+        if background1 and getattr(background1, "filename", None):
+            try:
+                batch_design1_bytes = await background1.read()
+                batch_design1_prompt = (prompt1 or "").strip() or None
+            except Exception as e:
+                logger.warning(f"Could not read batch background1: {e}")
+        if background2 and getattr(background2, "filename", None):
+            try:
+                batch_design2_bytes = await background2.read()
+                batch_design2_prompt = (prompt2 or "").strip() or None
+            except Exception as e:
+                logger.warning(f"Could not read batch background2: {e}")
         
         # Проверяем, является ли base_path URL или путем
         # Если это URL, используем API для публичных папок
@@ -2256,32 +2275,36 @@ async def batch_process_folders(
                 })
                 return
             
-            # Вспомогательная функция для создания дизайна
+            # Вспомогательная функция для создания дизайна (фон и промпт — из батча или дефолт)
             async def create_design_generator(processed_bytes: bytes, file_name: str, folder_name: str, output_path: str, 
                                              token: str, use_public_api: bool, public_key: str, api_key: str, 
-                                             design_count: list, results: dict):
-                """Создает дизайн для обработанного файла"""
+                                             design_count: list, results: dict,
+                                             background_bytes_override: Optional[bytes] = None,
+                                             prompt_override: Optional[str] = None,
+                                             design_suffix: str = "_design.png"):
+                """Создает дизайн: background_bytes_override и prompt_override из батча или дефолт."""
                 try:
-                    # Получаем путь к фону
-                    background_paths = [
-                        "/app/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg",
-                        os.path.expanduser("~/background_remover/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg"),
-                        "./background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg",
-                        "background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg"
-                    ]
+                    if background_bytes_override is not None:
+                        background_bytes = background_bytes_override
+                    else:
+                        background_paths = [
+                            "/app/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg",
+                            os.path.expanduser("~/background_remover/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg"),
+                            "./background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg",
+                            "background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg"
+                        ]
+                        background_path = None
+                        for path in background_paths:
+                            if os.path.exists(path):
+                                background_path = path
+                                break
+                        if not background_path:
+                            logger.warning("    Фон не найден, пропускаем создание дизайна")
+                            return
+                        with open(background_path, 'rb') as f:
+                            background_bytes = f.read()
                     
-                    background_path = None
-                    for path in background_paths:
-                        if os.path.exists(path):
-                            background_path = path
-                            break
-                    
-                    if not background_path:
-                        logger.warning(f"    Фон не найден, пропускаем создание дизайна")
-                        return
-                    
-                    with open(background_path, 'rb') as f:
-                        background_bytes = f.read()
+                    used_prompt = (prompt_override or "").strip() or PLACEMENT_DEFAULT_PROMPT
                     
                     processed_file_obj = io.BytesIO(processed_bytes)
                     processed_file_obj.name = "processed.png"
@@ -2289,13 +2312,12 @@ async def batch_process_folders(
                     background_file_obj.name = "background.jpeg"
                     
                     os.environ["REPLICATE_API_TOKEN"] = api_key
-                    
                     processed_file_obj.seek(0)
                     background_file_obj.seek(0)
                     
                     model_input = {
                         "images": [background_file_obj, processed_file_obj],
-                        "prompt": PLACEMENT_DEFAULT_PROMPT,
+                        "prompt": used_prompt,
                         "aspect_ratio": "4:3"
                     }
                     
@@ -2338,8 +2360,8 @@ async def batch_process_folders(
                                     design_bytes = response.content
                     
                     if design_bytes:
-                        # Сохраняем дизайн на Yandex Disk в ту же папку
-                        design_name = f"{file_name.rsplit('.', 1)[0]}_design.png"
+                        base_name = file_name.rsplit('.', 1)[0]
+                        design_name = f"{base_name}{design_suffix}" if design_suffix.startswith("_") else f"{base_name}_{design_suffix}"
                         design_save_path = f"{output_path}/{design_name}"
                         
                         # Проверяем, существует ли дизайн уже
@@ -2547,12 +2569,24 @@ async def batch_process_folders(
                                                             if file_response.status_code == 200:
                                                                 processed_bytes = file_response.content
                                                                 
-                                                                # Создаем дизайн
+                                                                # Дизайн 1 (дефолт или загруженные фон+промпт)
                                                                 async for update in create_design_generator(
                                                                     processed_bytes, first_file_name, current_name, output_path,
-                                                                    token, use_public_api, public_key, api_key, design_count, results
+                                                                    token, use_public_api, public_key, api_key, design_count, results,
+                                                                    background_bytes_override=batch_design1_bytes,
+                                                                    prompt_override=batch_design1_prompt,
+                                                                    design_suffix="_design.png"
                                                                 ):
                                                                     yield update
+                                                                if batch_design2_bytes and batch_design2_prompt:
+                                                                    async for update in create_design_generator(
+                                                                        processed_bytes, first_file_name, current_name, output_path,
+                                                                        token, use_public_api, public_key, api_key, design_count, results,
+                                                                        background_bytes_override=batch_design2_bytes,
+                                                                        prompt_override=batch_design2_prompt,
+                                                                        design_suffix="_design2.png"
+                                                                    ):
+                                                                        yield update
                                                 except Exception as e:
                                                     logger.warning(f"    Не удалось создать дизайн для {current_name}: {str(e)}")
                                 # Продолжаем обработку подпапок
@@ -2830,12 +2864,24 @@ async def batch_process_folders(
                                                     if file_response.status_code == 200:
                                                         processed_bytes = file_response.content
                                                         
-                                                        # Создаем дизайн
+                                                        # Дизайн 1
                                             async for update in create_design_generator(
-                                                            processed_bytes, source_file_name, current_name, output_path,
-                                                token, use_public_api, public_key, api_key, design_count, results
+                                                processed_bytes, source_file_name, current_name, output_path,
+                                                token, use_public_api, public_key, api_key, design_count, results,
+                                                background_bytes_override=batch_design1_bytes,
+                                                prompt_override=batch_design1_prompt,
+                                                design_suffix="_design.png"
                                             ):
                                                 yield update
+                                            if batch_design2_bytes and batch_design2_prompt:
+                                                async for update in create_design_generator(
+                                                    processed_bytes, source_file_name, current_name, output_path,
+                                                    token, use_public_api, public_key, api_key, design_count, results,
+                                                    background_bytes_override=batch_design2_bytes,
+                                                    prompt_override=batch_design2_prompt,
+                                                    design_suffix="_design2.png"
+                                                ):
+                                                    yield update
                                     except Exception as e:
                                         logger.warning(f"    Не удалось создать дизайн для {current_name}: {str(e)}")
                                         results["errors"].append(f"Design creation failed for {current_name}: {str(e)}")
@@ -3013,12 +3059,24 @@ async def batch_process_folders(
                                         if file_response.status_code == 200:
                                             processed_bytes = file_response.content
                                             
-                                            # Создаем дизайн
+                                            # Дизайн 1
                                             async for update in create_design_generator(
                                                 processed_bytes, source_file_name, folder_name, main_output_path,
-                                                token, use_public_api, public_key, api_key, design_count, results
+                                                token, use_public_api, public_key, api_key, design_count, results,
+                                                background_bytes_override=batch_design1_bytes,
+                                                prompt_override=batch_design1_prompt,
+                                                design_suffix="_design.png"
                                             ):
                                                 yield update
+                                            if batch_design2_bytes and batch_design2_prompt:
+                                                async for update in create_design_generator(
+                                                    processed_bytes, source_file_name, folder_name, main_output_path,
+                                                    token, use_public_api, public_key, api_key, design_count, results,
+                                                    background_bytes_override=batch_design2_bytes,
+                                                    prompt_override=batch_design2_prompt,
+                                                    design_suffix="_design2.png"
+                                                ):
+                                                    yield update
                         except Exception as e:
                             logger.warning(f"    Не удалось создать дизайн для главной папки {folder_name}: {str(e)}")
                             results["errors"].append(f"Design creation failed for {folder_name}: {str(e)}")
@@ -3305,12 +3363,24 @@ async def batch_process_folders(
                                     if file_response.status_code == 200:
                                         processed_bytes = file_response.content
                                         
-                                        # Создаем дизайн
+                                        # Дизайн 1
                                         async for update in create_design_generator(
                                             processed_bytes, source_file_name, folder_name, main_output_path,
-                                            token, use_public_api, public_key, api_key, design_count, results
+                                            token, use_public_api, public_key, api_key, design_count, results,
+                                            background_bytes_override=batch_design1_bytes,
+                                            prompt_override=batch_design1_prompt,
+                                            design_suffix="_design.png"
                                         ):
                                             yield update
+                                        if batch_design2_bytes and batch_design2_prompt:
+                                            async for update in create_design_generator(
+                                                processed_bytes, source_file_name, folder_name, main_output_path,
+                                                token, use_public_api, public_key, api_key, design_count, results,
+                                                background_bytes_override=batch_design2_bytes,
+                                                prompt_override=batch_design2_prompt,
+                                                design_suffix="_design2.png"
+                                            ):
+                                                yield update
                     except Exception as e:
                         logger.warning(f"    Не удалось создать дизайн для главной папки {folder_name}: {str(e)}")
                         results["errors"].append(f"Design creation failed for {folder_name}: {str(e)}")
