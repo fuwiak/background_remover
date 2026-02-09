@@ -358,7 +358,8 @@ class App {
         this.currentFileSource = null; // Информация об источнике файла: {type: 'yandex', folderUrl: '...', fileName: '...'} или null
         this.yandexFiles = [];
         this.processedImageBlob = null; // Обработанное изображение без шаблона (для изменения разрешения)
-        this.backgroundImage = null; // Изображение на фоне
+        this.backgroundImage = null;
+        this.backgroundImage2 = null;
         this.init();
     }
 
@@ -454,9 +455,12 @@ class App {
             this.placeOnBackground();
         });
 
-        // Download background button
+        // Download background buttons
         document.getElementById('downloadBackgroundBtn').addEventListener('click', () => {
             this.downloadBackground();
+        });
+        document.getElementById('downloadBackgroundBtn2').addEventListener('click', () => {
+            this.downloadBackground2();
         });
 
         // Yandex Disk - загрузка файлов из публичной папки
@@ -1211,19 +1215,22 @@ class App {
         document.getElementById('promptEditor').style.display = 'none';
         document.getElementById('processedImageDimensions').style.display = 'none';
         const backgroundImg = document.getElementById('backgroundImage');
-        if (backgroundImg) {
-            backgroundImg.style.display = 'none';
-        }
+        if (backgroundImg) backgroundImg.style.display = 'none';
         const backgroundPlaceholder = document.getElementById('backgroundPlaceholder');
-        if (backgroundPlaceholder) {
-            backgroundPlaceholder.style.display = 'block';
-        }
+        if (backgroundPlaceholder) backgroundPlaceholder.style.display = 'block';
         document.getElementById('downloadBackgroundBtn').style.display = 'none';
         document.getElementById('backgroundImageDimensions').style.display = 'none';
+        const backgroundImg2 = document.getElementById('backgroundImage2');
+        if (backgroundImg2) backgroundImg2.style.display = 'none';
+        const backgroundPlaceholder2 = document.getElementById('backgroundPlaceholder2');
+        if (backgroundPlaceholder2) backgroundPlaceholder2.style.display = 'block';
+        document.getElementById('downloadBackgroundBtn2').style.display = 'none';
+        const dim2 = document.getElementById('backgroundImageDimensions2');
+        if (dim2) dim2.style.display = 'none';
         this.processedImageBlob = null;
         this.backgroundImage = null;
+        this.backgroundImage2 = null;
     }
-    
 
     async processImage() {
         if (!this.currentFile) {
@@ -1576,20 +1583,19 @@ class App {
             // Если токена нет в localStorage, сервер возьмет его из env variables
             const token = this.yandexDisk.accessToken || localStorage.getItem('yandex_disk_token');
 
-            // Создаем FormData
             const formData = new FormData();
             formData.append('base_path', basePath);
             formData.append('model', model);
             formData.append('width', width);
             formData.append('height', height);
             formData.append('output_folder', outputFolder);
-            // Передаем ключ только если он есть (для replicate может быть в env на сервере)
-            if (apiKey) {
-                formData.append('apiKey', apiKey);
-            }
-            // Передаем токен только если он есть (если нет, сервер возьмет из env)
-            if (token) {
-                formData.append('token', token);
+            if (apiKey) formData.append('apiKey', apiKey);
+            if (token) formData.append('token', token);
+            const extraPhotosInput = document.getElementById('batchExtraPhotosInput');
+            if (extraPhotosInput && extraPhotosInput.files && extraPhotosInput.files.length > 0) {
+                for (const file of extraPhotosInput.files) {
+                    formData.append('extra_photos', file);
+                }
             }
 
             // Показываем контейнер прогресса
@@ -1851,6 +1857,9 @@ class App {
             case 'design_complete':
                 html += `<p style="color: #4CAF50; margin: 4px 0; padding-left: 48px;"><strong>[${timestamp}]</strong> ✓ ${data.message}</p>`;
                 break;
+            case 'extra_photo':
+                html += `<p style="color: #9C27B0; margin: 4px 0; padding-left: 48px;"><strong>[${timestamp}]</strong> 📷 ${data.message}</p>`;
+                break;
             case 'folder_complete':
                 html += `<p style="color: #4CAF50; margin: 4px 0; padding-left: 16px;"><strong>[${timestamp}]</strong> ✓ ${data.message}</p>`;
                 break;
@@ -1891,45 +1900,34 @@ class App {
             this.showBackgroundLoading(true);
             // Не скрываем кнопку - пользователь может попробовать снова с другим prompt
 
-            // Получаем prompt из textarea
             const promptTextarea = document.getElementById('backgroundPrompt');
             const prompt = promptTextarea ? promptTextarea.value : '';
-            
-            // Отправляем запрос на размещение на фоне
+            const bgInput1 = document.getElementById('backgroundDesignInput');
+            const bgInput2 = document.getElementById('backgroundDesignInput2');
+            const hasDesign2 = bgInput2 && bgInput2.files && bgInput2.files[0];
+
+            // Запрос 1: дизайн 1 (дефолтный фон или загруженный)
             const formData = new FormData();
             formData.append('processedImage', this.processedImage);
-            if (prompt) {
-                formData.append('prompt', prompt);
+            if (prompt) formData.append('prompt', prompt);
+            if (bgInput1 && bgInput1.files && bgInput1.files[0]) {
+                formData.append('backgroundImage', bgInput1.files[0]);
             }
 
-            const response = await fetch('/api/place-on-background', {
-                method: 'POST',
-                body: formData
-            });
-
+            const response = await fetch('/api/place-on-background', { method: 'POST', body: formData });
             if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.detail || 'Ошибка размещения на фоне');
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.detail || 'Ошибка размещения на фоне');
             }
+            const blob1 = await response.blob();
 
-            const blob = await response.blob();
-
-            // Отображение результата (заменяем предыдущий, если был)
-            // Освобождаем предыдущий URL, если был
             const backgroundImg = document.getElementById('backgroundImage');
-            if (backgroundImg.src && backgroundImg.src.startsWith('blob:')) {
-                URL.revokeObjectURL(backgroundImg.src);
-            }
-            
-            const url = URL.createObjectURL(blob);
+            if (backgroundImg.src && backgroundImg.src.startsWith('blob:')) URL.revokeObjectURL(backgroundImg.src);
+            const url1 = URL.createObjectURL(blob1);
             const backgroundPlaceholder = document.getElementById('backgroundPlaceholder');
-            if (backgroundPlaceholder) {
-                backgroundPlaceholder.style.display = 'none';
-            }
-            backgroundImg.src = url;
+            if (backgroundPlaceholder) backgroundPlaceholder.style.display = 'none';
+            backgroundImg.src = url1;
             backgroundImg.style.display = 'block';
-            
-            // Устанавливаем те же размеры отображения, что и у изображения в ЗАГРУЗКА
             const uploadImg = document.getElementById('uploadImage');
             if (uploadImg && uploadImg.complete && this.uploadedImageDimensions) {
                 const rect = uploadImg.getBoundingClientRect();
@@ -1939,27 +1937,53 @@ class App {
                 backgroundImg.style.maxHeight = `${rect.height}px`;
                 backgroundImg.style.objectFit = 'contain';
             }
-
-            // Показываем размеры изображения на фоне
             backgroundImg.onload = () => {
-                const backgroundDimensionsEl = document.getElementById('backgroundImageDimensions');
-                if (backgroundDimensionsEl) {
-                    // Получаем натуральные размеры изображения
-                    backgroundDimensionsEl.textContent = `${backgroundImg.naturalWidth} × ${backgroundImg.naturalHeight} px`;
-                    backgroundDimensionsEl.style.display = 'block';
-                }
+                const el = document.getElementById('backgroundImageDimensions');
+                if (el) { el.textContent = `${backgroundImg.naturalWidth} × ${backgroundImg.naturalHeight} px`; el.style.display = 'block'; }
             };
-
             if (backgroundImg.complete) {
-                const backgroundDimensionsEl = document.getElementById('backgroundImageDimensions');
-                if (backgroundDimensionsEl) {
-                    backgroundDimensionsEl.textContent = `${backgroundImg.naturalWidth} × ${backgroundImg.naturalHeight} px`;
-                    backgroundDimensionsEl.style.display = 'block';
-                }
+                const el = document.getElementById('backgroundImageDimensions');
+                if (el) { el.textContent = `${backgroundImg.naturalWidth} × ${backgroundImg.naturalHeight} px`; el.style.display = 'block'; }
             }
-
             document.getElementById('downloadBackgroundBtn').style.display = 'block';
-            this.backgroundImage = blob;
+            this.backgroundImage = blob1;
+
+            // Запрос 2: дизайн 2 (обязателен свой фон)
+            if (hasDesign2) {
+                const prompt2El = document.getElementById('backgroundPrompt2');
+                const prompt2 = prompt2El ? prompt2El.value : '';
+                const formData2 = new FormData();
+                formData2.append('processedImage', this.processedImage.slice(0));
+                if (prompt2) formData2.append('prompt', prompt2);
+                formData2.append('backgroundImage', bgInput2.files[0]);
+
+                const response2 = await fetch('/api/place-on-background', { method: 'POST', body: formData2 });
+                if (!response2.ok) {
+                    const err = await response2.json().catch(() => ({}));
+                    this.showError('Дизайн 2: ' + (err.detail || 'ошибка'));
+                } else {
+                    const blob2 = await response2.blob();
+                    const backgroundImg2 = document.getElementById('backgroundImage2');
+                    if (backgroundImg2.src && backgroundImg2.src.startsWith('blob:')) URL.revokeObjectURL(backgroundImg2.src);
+                    backgroundImg2.src = URL.createObjectURL(blob2);
+                    backgroundImg2.style.display = 'block';
+                    const ph2 = document.getElementById('backgroundPlaceholder2');
+                    if (ph2) ph2.style.display = 'none';
+                    backgroundImg2.onload = () => {
+                        const el = document.getElementById('backgroundImageDimensions2');
+                        if (el) { el.textContent = `${backgroundImg2.naturalWidth} × ${backgroundImg2.naturalHeight} px`; el.style.display = 'block'; }
+                    };
+                    document.getElementById('downloadBackgroundBtn2').style.display = 'block';
+                    this.backgroundImage2 = blob2;
+                }
+            } else {
+                this.backgroundImage2 = null;
+                const img2 = document.getElementById('backgroundImage2');
+                if (img2) img2.style.display = 'none';
+                const ph2 = document.getElementById('backgroundPlaceholder2');
+                if (ph2) ph2.style.display = 'block';
+                document.getElementById('downloadBackgroundBtn2').style.display = 'none';
+            }
 
             this.showBackgroundLoading(false);
         } catch (error) {
@@ -2037,9 +2061,19 @@ Only the product from @img2 may be added.
 Everything else in @img1 must remain exactly the same`;
         
         const promptTextarea = document.getElementById('backgroundPrompt');
-        if (promptTextarea) {
-            promptTextarea.value = defaultPrompt;
-        }
+        if (promptTextarea) promptTextarea.value = defaultPrompt;
+        const promptTextarea2 = document.getElementById('backgroundPrompt2');
+        if (promptTextarea2) promptTextarea2.value = defaultPrompt;
+    }
+
+    downloadBackground2() {
+        if (!this.backgroundImage2) return;
+        const url = URL.createObjectURL(this.backgroundImage2);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'background2.png';
+        a.click();
+        URL.revokeObjectURL(url);
     }
 
     async changeResolution(width, height) {

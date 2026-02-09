@@ -5,7 +5,7 @@ import re
 import json
 import logging
 import base64
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -631,9 +631,10 @@ async def process_image(
 @app.post("/api/place-on-background")
 async def place_on_background(
     processedImage: UploadFile = File(...),
-    prompt: Optional[str] = Form(None)
+    prompt: Optional[str] = Form(None),
+    backgroundImage: Optional[UploadFile] = File(None)
 ):
-    """Размещение обработанного изображения на фоне используя prunaai/p-image-edit"""
+    """Размещение обработанного изображения на фоне используя prunaai/p-image-edit. Фон можно передать или использовать дефолтный."""
     import replicate
     import os
     
@@ -645,26 +646,25 @@ async def place_on_background(
         # Загружаем обработанное изображение
         processed_image_bytes = await processedImage.read()
         
-        # Путь к файлу фона - пробуем разные пути
-        background_paths = [
-            "/app/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg",
-            os.path.expanduser("~/background_remover/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg"),
-            "/app/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpg.pdf",
-            os.path.expanduser("~/background_remover/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpg.pdf")
-        ]
-        
-        background_path = None
-        for path in background_paths:
-            if os.path.exists(path):
-                background_path = path
-                break
-        
-        if not os.path.exists(background_path):
-            raise HTTPException(status_code=500, detail=f"Background file not found at {background_path}")
-        
-        # Читаем файл фона
-        with open(background_path, 'rb') as f:
-            background_image_bytes = f.read()
+        # Фон: из загрузки или дефолтный файл
+        if backgroundImage and backgroundImage.filename:
+            background_image_bytes = await backgroundImage.read()
+        else:
+            background_paths = [
+                "/app/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg",
+                os.path.expanduser("~/background_remover/background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg"),
+                "./background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg",
+                "background/ФМГ_Авито_Универсальная_Обложка_Без_Товара.jpeg",
+            ]
+            background_path = None
+            for path in background_paths:
+                if os.path.exists(path):
+                    background_path = path
+                    break
+            if not background_path:
+                raise HTTPException(status_code=500, detail="Background file not found and no image uploaded")
+            with open(background_path, 'rb') as f:
+                background_image_bytes = f.read()
         
         # Устанавливаем API токен для replicate
         os.environ["REPLICATE_API_TOKEN"] = api_key
@@ -1934,16 +1934,14 @@ async def batch_process_folders(
     token: Optional[str] = Form(None),
     width: int = Form(1200),
     height: int = Form(1200),
-    output_folder: str = Form("")  # Будет генерироваться автоматически
+    output_folder: str = Form(""),
+    extra_photos: List[UploadFile] = File(default=[])
 ):
     """
     Batch processing файлов из выбранной папки на Yandex Disk.
-    Обрабатывает все фотографии в выбранной папке.
-    Все фотографии переносятся на белый фон с заданным размером.
-    Результаты сохраняются в папку [название_папки]/Обработанный (внутри исходной папки).
-    Для подпапок результаты сохраняются в [название_подпапки]/Обработанный.
-    Для первой фотографии создается версия с дизайном (размещение на фоне).
-    Все результаты сохраняются на Yandex Disk.
+    Результаты сохраняются в [название_папки]/Обработанный.
+    Для первой фотографии создается версия с дизайном.
+    Доп. фото (extra_photos) копируются в каждую папку Обработанный.
     """
     logger = logging.getLogger(__name__)
     cost_logger = logging.getLogger('costs')
@@ -1988,6 +1986,15 @@ async def batch_process_folders(
                     status_code=400, 
                     detail=f"API key not provided for model {model}. Please set it in Railway variables or provide it in the request."
                 )
+        
+        # Доп. фото для копирования в каждую папку Обработанный
+        extra_photos_data: List[tuple] = []
+        for f in (extra_photos or []):
+            if getattr(f, "filename", None):
+                try:
+                    extra_photos_data.append((f.filename, await f.read()))
+                except Exception as e:
+                    logger.warning(f"Could not read extra photo {f.filename}: {e}")
         
         # Проверяем, является ли base_path URL или путем
         # Если это URL, используем API для публичных папок
@@ -2832,6 +2839,25 @@ async def batch_process_folders(
                                     except Exception as e:
                                         logger.warning(f"    Не удалось создать дизайн для {current_name}: {str(e)}")
                                         results["errors"].append(f"Design creation failed for {current_name}: {str(e)}")
+                                
+                                # Доп. фото в каждую папку Обработанный
+                                for extra_name, extra_bytes in extra_photos_data:
+                                    try:
+                                        save_path = f"{output_path}/{extra_name}"
+                                        async with httpx.AsyncClient() as upload_client:
+                                            link_resp = await upload_client.get(
+                                                "https://cloud-api.yandex.net/v1/disk/resources/upload",
+                                                params={"path": save_path, "overwrite": "false"},
+                                                headers={"Authorization": f"OAuth {token}"},
+                                                timeout=30.0
+                                            )
+                                            if link_resp.status_code == 200:
+                                                ct = "image/png" if extra_name.lower().endswith(".png") else "image/jpeg" if extra_name.lower().endswith((".jpg", ".jpeg")) else "application/octet-stream"
+                                                up_resp = await upload_client.put(link_resp.json()["href"], content=extra_bytes, headers={"Content-Type": ct}, timeout=60.0)
+                                                if up_resp.status_code in [201, 202]:
+                                                    yield await send_progress_update({"type": "extra_photo", "folder_name": current_name, "file_name": extra_name, "message": f"Доп. фото: {extra_name}"})
+                                    except Exception as ex:
+                                        logger.warning(f"    Доп. фото {extra_name}: {ex}")
                         
                         # Рекурсивно обрабатываем все подпапки
                         for subfolder in current_subfolders:
@@ -3288,6 +3314,25 @@ async def batch_process_folders(
                     except Exception as e:
                         logger.warning(f"    Не удалось создать дизайн для главной папки {folder_name}: {str(e)}")
                         results["errors"].append(f"Design creation failed for {folder_name}: {str(e)}")
+                
+                # Доп. фото в главную папку Обработанный
+                for extra_name, extra_bytes in extra_photos_data:
+                    try:
+                        save_path = f"{main_output_path}/{extra_name}"
+                        async with httpx.AsyncClient() as upload_client:
+                            link_resp = await upload_client.get(
+                                "https://cloud-api.yandex.net/v1/disk/resources/upload",
+                                params={"path": save_path, "overwrite": "false"},
+                                headers={"Authorization": f"OAuth {token}"},
+                                timeout=30.0
+                            )
+                            if link_resp.status_code == 200:
+                                ct = "image/png" if extra_name.lower().endswith(".png") else "image/jpeg" if extra_name.lower().endswith((".jpg", ".jpeg")) else "application/octet-stream"
+                                up_resp = await upload_client.put(link_resp.json()["href"], content=extra_bytes, headers={"Content-Type": ct}, timeout=60.0)
+                                if up_resp.status_code in [201, 202]:
+                                    yield await send_progress_update({"type": "extra_photo", "folder_name": folder_name, "file_name": extra_name, "message": f"Доп. фото: {extra_name}"})
+                    except Exception as ex:
+                        logger.warning(f"    Доп. фото {extra_name}: {ex}")
             
             # Обновляем счетчики перед расчетом стоимости
             background_removal_count = bg_count[0]
